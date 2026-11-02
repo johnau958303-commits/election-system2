@@ -1,0 +1,20 @@
+{
+  "name": "election-management-voting-system",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Election Management & Voting System with accounts, nominations, voting restrictions, counting and persistent SQLite storage.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node --no-warnings server.js",
+    "dev": "node --no-warnings --watch server.js",
+    "seed": "node --no-warnings server/seed.js",
+    "reset": "node --no-warnings server/seed.js --reset",
+    "test": "node --no-warnings --test test/api.test.js"
+  },
+  "engines": {
+    "node": ">=22.5"
+  },
+  "dependencies": {
+    "express": "^5.3.0"
+  }
+}
