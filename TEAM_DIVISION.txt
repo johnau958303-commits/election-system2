@@ -1,0 +1,413 @@
+ELECTION MANAGEMENT & VOTING SYSTEM - TEAM DIVISION OF WORK
+=============================================================
+
+Project: Election Management & Voting System
+Stack:   Node.js 22+, Express 5, SQLite (node:sqlite), vanilla HTML/CSS/JavaScript SPA
+Note:    UI/visual design was completed by all nine members together and is not
+         counted as an individual module. The frontend assignments below cover
+         page logic, interaction, and data wiring only.
+
+
+1. DIVISION PRINCIPLES
+----------------------
+
+1. Each member owns one independent module with clear file boundaries and
+   deliverables.
+2. Modules collaborate only through APIs or defined function interfaces,
+   avoiding changes to another member's code.
+3. app.js is currently a single file, so frontend work is divided into
+   non-overlapping functional sections.
+4. For fully file-level independence, app.js can later be split into core.js,
+   student.js, and admin.js.
+
+
+2. SUMMARY TABLE
+----------------
+
+Member | Independent Module                  | Main Files / Sections                              | Workload
+-------+-------------------------------------+----------------------------------------------------+---------
+1      | System Bootstrap & Deployment       | server.js, server/app.js, start/stop scripts,      | 8%
+       |                                     | package.json                                       |
+2      | Database & Seed Data                | server/db.js, server/seed.js                       | 12%
+3      | Authentication & Security           | server/auth.js, server/routes/auth.js              | 8%
+4      | Election Domain & Public API        | server/helpers.js, server/routes/elections.js      | 11%
+5      | Nomination & Voting Workflow        | server/routes/nominations.js, routes/votes.js      | 9%
+6      | Admin Backend & Election Lifecycle  | server/routes/admin.js                             | 13%
+7      | Frontend Core Framework             | index.html, app.js core/render/event sections      | 15%
+8      | Student & Public Pages              | app.js login-to-results sections + loaders         | 12%
+9      | Admin UI, Testing & QA              | app.js admin sections + test/api.test.js           | 12%
+
+
+3. MEMBER DETAILS
+-----------------
+
+
+MEMBER 1: SYSTEM BOOTSTRAP & DEPLOYMENT (Infrastructure & DevOps)
+
+Independent scope: Application startup, middleware, static file serving, and
+public sharing.
+
+Main files:
+  - server.js
+  - server/app.js
+  - package.json, .gitignore
+  - start-public.ps1, start-public.cmd
+  - stop-public.ps1, stop-public.cmd
+
+Responsibilities:
+  - Build the Express 5 application skeleton and createApp()
+  - Define middleware order: security headers -> JSON body -> attachUser ->
+    originCheck
+  - Mount authentication, election, nomination, voting, and admin routers
+  - Serve index.html and app.js with a no-store cache policy
+  - Implement the /api/health health-check endpoint
+  - Implement API 404 handling and the global error handler
+  - Configure PORT, HOST, Node version requirements, and npm scripts
+  - Write the one-click Cloudflare Tunnel sharing script: health check, server
+    startup, public URL extraction, clipboard copy, PID recording, and cleanup
+
+Deliverables:
+  - One-command runnable server
+  - Shareable public URL
+  - Stop script and health check
+
+Interfaces:
+  - Exports createApp() for server.js and tests
+  - Mounts routers from Members 3-6
+
+
+MEMBER 2: DATABASE & SEED DATA (Database & Persistence)
+
+Independent scope: SQLite schema, data integrity, transactions, time handling,
+and demo data.
+
+Main files:
+  - server/db.js
+  - server/seed.js
+
+Responsibilities:
+  - Design six tables: users, sessions, elections, candidates, votes,
+    result_entries
+  - Create indexes, foreign keys, and CHECK constraints
+  - Implement UNIQUE (election_id, round, voter_id) to guarantee one vote per
+    voter per round
+  - Configure WAL, foreign_keys = ON, and busy_timeout
+  - Implement the transaction() wrapper (BEGIN IMMEDIATE / COMMIT / ROLLBACK)
+  - Implement HKT time conversion with toIso(), now(), and nowIso()
+  - Support the ELECTION_NOW test-time override and the DB_PATH environment
+    variable
+  - Seed demo data: four accounts, six elections in different stages,
+    candidates, and published results (including a winner and a tie)
+  - Implement database rebuild via npm run reset
+
+Deliverables:
+  - Persistent SQLite database
+  - Complete schema
+  - Rebuildable demo data
+
+Interfaces:
+  - Exports getDb(), transaction(), and time utilities for all backend modules
+
+
+MEMBER 3: AUTHENTICATION & SECURITY (Authentication & Security)
+
+Independent scope: Account credentials, sessions, access control, and basic
+attack protection.
+
+Main files:
+  - server/auth.js
+  - server/routes/auth.js
+
+Responsibilities:
+  - Hash passwords with crypto.scryptSync and a random salt
+  - Verify passwords with timingSafeEqual
+  - Design database-backed sessions: random 32 bytes, 7-day expiry, expired-
+    session cleanup
+  - Set the emvs_sid cookie with httpOnly, sameSite=lax, and secure in
+    production
+  - Implement attachUser, requireAuth, and requireAdmin
+  - Implement originCheck to block cross-site non-GET requests
+  - Implement login throttling: 10 attempts per IP + username per 10 minutes
+  - Validate username and password formats
+  - Complete /api/auth/session, register, login, logout, demo-admin, and me
+
+Deliverables:
+  - Secure login system
+  - Role-based access control
+  - Session management
+
+Interfaces:
+  - Provides req.user, requireAuth, and requireAdmin
+  - Used by the nomination, voting, and admin modules
+
+
+MEMBER 4: ELECTION DOMAIN & PUBLIC API (Election Domain & Public API)
+
+Independent scope: Election state machine, data serialization, vote counting,
+and all public read APIs.
+
+Main files:
+  - server/helpers.js
+  - server/routes/elections.js
+
+Responsibilities:
+  - Implement serializeCandidate and serializeElection
+  - Implement parseManifesto and parseContacts
+  - Implement election-status derivation via electionStatus():
+    draft, nominations_open, candidate_review, voting_open, upcoming, closed,
+    published
+  - Implement approvedCandidates, allCandidates, and round-based candidate
+    filtering
+  - Implement countVotes(): total votes, turnout, leader, and tie detection
+  - Implement resultEntries() and resultSummary() for frozen results
+  - Complete the public APIs:
+      - Election list / detail / candidates / results
+      - /api/results
+      - /api/my-votes
+      - /api/nominations/mine
+      - /api/status
+
+Deliverables:
+  - Shared election data format for the whole system
+  - Election-status logic
+  - Public query APIs
+
+Interfaces:
+  - Helpers are consumed by Members 5 and 6
+  - APIs are consumed by the frontend (Members 7-9)
+
+
+MEMBER 5: NOMINATION & VOTING WORKFLOW (Nomination & Voting Backend)
+
+Independent scope: Student nomination submission/editing and vote casting with
+duplicate prevention.
+
+Main files:
+  - server/routes/nominations.js
+  - server/routes/votes.js
+
+Responsibilities:
+  - Nomination creation checks: login, voter eligibility, entry_mode = students,
+    nomination window, duplicate submission
+  - Nomination form validation: name, introduction, manifesto, declaration
+    checkbox, contacts
+  - Image validation: PNG/JPEG/WebP base64 only, maximum 2 MB
+  - Nomination editing: own nomination only; locked after rejection or deadline
+  - Vote checks: eligibility, correct round, voting window, approved candidate
+  - Second-round votes require the candidate to be advanced
+  - Enforce "one vote per voter per round"
+  - Use the database UNIQUE constraint to handle concurrent duplicate votes
+  - Complete GET /api/elections/:slug/my-vote
+
+Deliverables:
+  - Complete candidate nomination workflow
+  - Secure, non-duplicable voting workflow
+
+Interfaces:
+  - Uses Member 3's auth guards
+  - Uses Member 4's helpers
+  - Uses Member 2's database
+
+
+MEMBER 6: ADMIN BACKEND & ELECTION LIFECYCLE (Admin Backend)
+
+Independent scope: All administrator operations on elections, candidates,
+stages, and results.
+
+Main files:
+  - server/routes/admin.js
+
+Responsibilities:
+  - Create/edit elections: title, description, seats, dates, candidate count,
+    single/two-round mode, candidate entry mode, voting rules
+  - Date validation and automatic unique slug generation
+  - Implement stage transitions via PATCH /stage
+  - Implement advanceFinalists() for the second round: top four advance, with
+    boundary ties advancing too
+  - Implement publishElection(): write result_entries, mark elected/tied,
+    freeze results
+  - Clear frozen results when unpublishing
+  - Nomination review: approve / reject / return
+  - Add and edit candidates as an administrator
+  - Provide admin overview statistics
+  - Provide the live vote-count endpoint
+
+Deliverables:
+  - Complete election management API
+  - Vote-counting and result-publishing API
+
+Interfaces:
+  - Uses Members 2-4's database, auth, and helpers
+  - Consumed by Member 9's admin frontend
+
+
+MEMBER 7: FRONTEND CORE FRAMEWORK (Frontend Core)
+
+Independent scope: The SPA's shared skeleton, routing, state, API calls,
+rendering pipeline, and global events.
+
+Main files:
+  - index.html (page shell, layout containers, CSS mounting; visual design
+    decided by the whole team)
+  - app.js core sections:
+      - Lines 1-475: icons, state, shared HTML helpers, navigation, routing,
+        date formatting, api(), toast, selection storage
+      - Lines 1525-1681: paint(), render(), route guards, render token
+      - Lines 1682-2045: handleSubmit, handleClick, handleChange, handleInput,
+        initialise, startup flow
+
+Responsibilities:
+  - Hash-based SPA routing and query-parameter parsing
+  - Global state and API error handling
+  - Shared UI helper functions: field, button, badge, notice, steps, heading
+  - Election-list derivation, HKT date/time formatting, status badges, timeline
+  - Login and admin route protection
+  - Tablet/mobile menu, text-size toggle, print, skip link
+  - Centralized event handling for form submission, button actions, and image-
+    upload previews
+  - Restore the session and perform the first render on startup
+
+Deliverables:
+  - Frontend framework shared by all pages
+  - Shared interaction and rendering foundation
+
+Interfaces:
+  - Provides state, api(), render(), and shared components to Members 8 and 9
+
+Note: Since app.js is a single file, the frontend is divided by functional
+sections; the sections do not overlap.
+
+
+MEMBER 8: STUDENT & PUBLIC PAGES (Student / Public Frontend)
+
+Independent scope: All pages and data loading used by visitors and students.
+
+Main files / app.js sections:
+  - Lines 477-538: login, registration, success pages
+  - Lines 539-620: student dashboard
+  - Lines 621-738: election information, details, candidate list, candidate
+    profile
+  - Lines 739-798: nomination page, live preview
+  - Lines 799-961: voting list, ballot, confirmation, voting status
+  - Lines 962-1035: results list, result detail
+  - Lines 1206-1272: upcoming elections and details
+  - Related data loading in loadRouteData (approximately lines 1315-1482)
+
+Responsibilities:
+  - Login/registration forms and success flows
+  - Dashboard: current elections, upcoming elections, completed results, my
+    nomination, notices
+  - Election information pages, timeline, eligibility and status display
+  - Candidate list and profiles: manifesto, contacts, photo
+  - Nomination form: live preview, contacts, image upload
+  - Voting flow: select candidate -> confirm -> submit -> success page
+  - Voting status page: eligibility, already voted, not open, and other reasons
+  - Results list and details, elected/tie display
+  - Upcoming election list and details
+
+Deliverables:
+  - Complete student/visitor user journey
+
+Interfaces:
+  - Connects to Members 3, 4, and 5's APIs
+  - Uses Member 7's frontend framework
+
+
+MEMBER 9: ADMIN UI, TESTING & QUALITY ASSURANCE (Admin UI, Testing & QA)
+
+Independent scope: Admin interface implementation, plus automated testing and
+integration acceptance for the whole system.
+
+Main files / app.js sections:
+  - Lines 1036-1205: admin overview, election setup, manage election,
+    nomination review, vote counting
+  - Lines 1273-1314: admin candidate data entry
+  - Lines 1483-1519: admin-route data loading
+  - All nine integration tests in test/api.test.js
+
+Responsibilities:
+  - Admin dashboard, statistics, pending nominations
+  - Election create/edit forms, round-setup summary, candidate entry-mode toggle
+  - Manage election: stage transitions, candidate list
+  - Nomination review: approve / reject / return
+  - Counting page: live vote totals, turnout, publish results
+  - Add and edit administrator-entered candidate data
+  - Write and maintain nine API integration tests:
+      1. Registration, duplicate usernames, login, and sessions
+      2. Election information retrieval
+      3. Admin creates/edits elections; students cannot
+      4. Nomination submission, editing before deadline, approval
+      5. One vote per voter; duplicate/ineligible/closed-period blocking
+      6. Counting, ties, and publishing
+      7. Two-round advancement and round restrictions
+      8. SQLite persistence
+      9. Health-check endpoint
+  - Run npm test, end-to-end acceptance, and regression testing
+
+Deliverables:
+  - Complete admin console
+  - Automated test suite
+  - Acceptance record
+
+Interfaces:
+  - Connects to Member 6's admin APIs
+  - Uses Member 7's frontend framework
+
+
+4. SHARED RESPONSIBILITIES (NOT COUNTED AS INDIVIDUAL MODULES)
+---------------------------------------------------------------
+
+  - UI/visual design, layouts, responsiveness, and accessibility
+  - Requirements discussion, data-model and workflow alignment
+  - Frontend/backend integration debugging and demo rehearsal
+  - Documentation and report consolidation
+
+
+5. MODULE DEPENDENCY DIAGRAM
+----------------------------
+
+  Member 2 (DB / Seed)
+          |
+          v
+  Member 3 (Auth) ------+
+          |             |
+  Member 4 (Helpers /   |
+           Public API)  |
+          |             |
+          +--> Member 5 (Nomination / Voting)
+          |             |
+          +--> Member 6 (Admin / Lifecycle)
+                        |
+  Member 1 (App / Deployment) --+
+          |
+          v
+  Member 7 (Frontend Core)
+          |
+          +--> Member 8 (Student / Public Pages)
+          +--> Member 9 (Admin UI / Testing & QA)
+
+
+6. SUGGESTED DEVELOPMENT ORDER
+------------------------------
+
+  1. Member 2: Complete the schema and seed data
+  2. Member 3: Complete authentication and sessions
+  3. Member 4: Complete helpers and public APIs
+  4. Members 5 & 6: Develop nomination/voting and admin backend in parallel
+  5. Member 1: Mount routers and handle deployment
+  6. Member 7: Complete the frontend framework
+  7. Members 8 & 9: Develop student and admin interfaces in parallel
+  8. Member 9: Coordinate testing and integration acceptance
+
+
+7. NOTES
+--------
+
+  - This division is based on module responsibility, not equal line counts;
+    actual workload may vary due to debugging and integration.
+  - The frontend app.js is divided by section. If multiple members edit the
+    same file concurrently, agree on a merge order or use feature branches.
+  - For true "one independent file per member," the frontend can be split into:
+      - app-core.js (Member 7)
+      - app-student.js (Member 8)
+      - app-admin.js (Member 9)

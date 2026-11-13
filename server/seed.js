@@ -72,7 +72,7 @@ const EXTRA_CANDIDATES = [
 }));
 
 const RULES = [
-  'Each eligible student may cast one vote for one candidate.',
+  'Each eligible voter may cast one vote for one candidate.',
   'Review your selected candidate before confirming your vote.',
   'Voting is available during the stated voting period.',
   'The candidate with the highest number of accepted votes is elected.',
@@ -122,41 +122,14 @@ function seedIfEmpty(db = getDb()) {
     'admin',
     false
   );
-  const studentId = addUser(
-    'student',
-    'Student1234!',
-    'Demo Student',
-    'S001',
-    'student@school.example',
-    'student',
-    true
-  );
-  addUser(
-    'notonroll',
-    'Student1234!',
-    'Not On Roll',
-    'S999',
-    'notonroll@school.example',
-    'student',
-    false
-  );
-  const alexUserId = addUser(
-    'alex',
-    'Student1234!',
-    'Alex Chan',
-    'S101',
-    'alex@school.example',
-    'student',
-    true
-  );
 
   const insertElection = db.prepare(
     `INSERT INTO elections
       (slug, title, description, seats, method, nomination_open, nomination_close,
        voting_open, voting_close, round2_open, round2_close, results_at, stage,
-       entry_mode, candidate_count, round_mode, eligible_group, voting_rules,
+       entry_mode, candidate_count, round_mode, voter_mode, eligible_group, voting_rules,
        published, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   );
 
   const addElection = (data) => {
@@ -177,7 +150,8 @@ function seedIfEmpty(db = getDb()) {
       data.entry_mode || 'students',
       data.candidate_count ?? 4,
       data.round_mode || 'single',
-      data.eligible_group || 'All registered students',
+      data.voter_mode || 'open',
+      data.eligible_group || 'All registered voters',
       (data.voting_rules || RULES).join('\n'),
       data.published ? 1 : 0,
       created
@@ -198,14 +172,14 @@ function seedIfEmpty(db = getDb()) {
     stage: 'Voting open',
     candidate_count: 4,
     round_mode: 'single',
-    eligible_group: 'All registered students'
+    eligible_group: 'All registered voters'
   });
 
   const artsId = addElection({
     slug: 'arts',
     title: 'Arts Club Representative Election 2026',
     description:
-      'Choose a student representative for the Arts Club. The first round uses a names-only ballot; the top four candidates advance to the second round.',
+      'Choose a student representative for the Arts Club. The first round uses a names-only ballot; the top eight candidates advance to the second round.',
     nomination_open: hktIso(-25),
     nomination_close: hktIso(-15, 18),
     voting_open: hktIso(-1),
@@ -216,7 +190,7 @@ function seedIfEmpty(db = getDb()) {
     stage: 'First round',
     candidate_count: 12,
     round_mode: 'two',
-    eligible_group: 'All registered students'
+    eligible_group: 'All registered voters'
   });
 
   const houseId = addElection({
@@ -249,7 +223,7 @@ function seedIfEmpty(db = getDb()) {
     entry_mode: 'admin',
     candidate_count: 3,
     round_mode: 'single',
-    eligible_group: 'All registered students'
+    eligible_group: 'All registered voters'
   });
 
   const activitiesId = addElection({
@@ -314,19 +288,13 @@ function seedIfEmpty(db = getDb()) {
     return Number(info.lastInsertRowid);
   };
 
-  const councilCandidateIds = DEMO_CANDIDATES.map((candidate, index) =>
-    addCandidate(councilId, candidate, {
-      userId: index === 0 ? alexUserId : null,
-      advanced: true
-    })
+  const councilCandidateIds = DEMO_CANDIDATES.map((candidate) =>
+    addCandidate(councilId, candidate, { advanced: true })
   );
 
   const artsCandidates = [...DEMO_CANDIDATES, ...EXTRA_CANDIDATES];
   const artsCandidateIds = artsCandidates.map((candidate, index) =>
-    addCandidate(artsId, candidate, {
-      userId: index === 0 ? alexUserId : null,
-      advanced: index < 4
-    })
+    addCandidate(artsId, candidate, { advanced: index < 8 })
   );
 
   const activitiesCandidateIds = DEMO_CANDIDATES.map((candidate) =>
@@ -387,8 +355,6 @@ function seedIfEmpty(db = getDb()) {
 
   return {
     adminId,
-    studentId,
-    alexUserId,
     elections: {
       councilId,
       artsId,
@@ -420,7 +386,7 @@ if (require.main === module) {
   const seeded = reset ? resetDatabase() : seedIfEmpty();
   if (seeded) {
     console.log('Seeded demo data into', DB_PATH);
-    console.log('Accounts: admin / Admin1234!, student / Student1234!, alex / Student1234!, notonroll / Student1234!');
+    console.log('Account: admin / Admin1234!');
   } else {
     console.log('Database already contains data. Use "npm run reset" to rebuild demo data.');
   }

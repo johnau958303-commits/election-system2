@@ -129,8 +129,8 @@ try {
   Write-Host $publicUrl -ForegroundColor Yellow
   Write-Host ''
   Write-Host 'The link has been copied to your clipboard.' -ForegroundColor Green
-  Write-Host 'Student login: student / Student1234!'
-  Write-Host 'Admin login:   admin / Admin1234!'
+  Write-Host 'Voters: register on the site and verify your email.'
+  Write-Host 'Admin login: admin / Admin1234!'
   Write-Host ''
   Write-Host 'Cloudflare may take up to a minute to activate the link. Refresh it shortly.' -ForegroundColor DarkGray
   Write-Host 'Keep this window open. Press Ctrl+C to stop sharing.' -ForegroundColor Cyan

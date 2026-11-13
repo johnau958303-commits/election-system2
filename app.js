@@ -15,7 +15,7 @@ const icon = (name, size = 32) =>
 const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
 const HKT_TIMEZONE = 'Asia/Hong_Kong';
 const DEFAULT_RULES = [
-  'Each eligible student may cast one vote for one candidate.',
+  'Each eligible voter may cast one vote for one candidate.',
   'Review your selected candidate before confirming your vote.',
   'Voting is available during the stated voting period.',
   'The candidate with the highest number of accepted votes is elected.',
@@ -24,6 +24,7 @@ const DEFAULT_RULES = [
 
 const state = {
   user: null,
+  demoMode: false,
   elections: [],
   election: null,
   electionCandidates: [],
@@ -47,12 +48,17 @@ const state = {
   adminOverview: null,
   adminElection: null,
   adminCandidates: [],
+  adminReview: null,
   adminCount: null,
   adminCandidateIndex: 0,
   adminPicture: undefined,
   setupElection: null,
   setupSlug: null,
-  registeredUsername: ''
+  registeredUsername: '',
+  pendingEmail: '',
+  googleEnabled: false,
+  emailMode: 'console',
+  adminVoterRoll: null
 };
 
 let candidates = [];
@@ -71,6 +77,8 @@ let nominationDraft = false;
 let adminDraft = {};
 let adminSaved = false;
 let renderToken = 0;
+
+const isAdminUser = () => state.user?.role === 'admin';
 
 const escapeHtml = (s) =>
   String(s ?? '').replace(/[&<>"']/g, (c) => ({
@@ -117,7 +125,7 @@ const routeGroup = (r) =>
     ? 'candidates'
     : ['ballot', 'confirm', 'vote-success', 'status'].includes(r)
       ? 'vote'
-      : ['setup', 'manage', 'admin-nominations', 'counting', 'candidate-entry'].includes(r)
+      : ['setup', 'manage', 'admin-nominations', 'admin-review', 'counting', 'candidate-entry', 'voter-roll'].includes(r)
         ? 'admin'
         : ['details', 'upcoming-detail'].includes(r)
           ? 'elections'
@@ -133,6 +141,7 @@ const pageTitles = {
   login: 'Login',
   register: 'Create an account',
   'register-success': 'Registration confirmation',
+  'verify-email': 'Verify your email',
   dashboard: 'My dashboard',
   elections: 'Election information',
   details: 'Election details',
@@ -150,6 +159,7 @@ const pageTitles = {
   setup: 'Election setup',
   manage: 'Manage election',
   'admin-nominations': 'Review nominations',
+  'admin-review': 'Review application',
   counting: 'Vote counting'
 };
 
@@ -347,10 +357,17 @@ function contextRoute(base, context) {
   return base + (context === 'first' ? '?round=1' : context === 'second' ? '?round=2' : '');
 }
 
+function activeRoundForElection(election) {
+  if (!election || election.roundMode !== 'two') return 1;
+  if (election.stage === 'Second round') return 2;
+  if (election.published && Number(election.results?.round) === 2) return 2;
+  return 1;
+}
+
 function voteRouteForElection(base, election) {
   const params = ['election=' + election.slug];
   if (election.roundMode === 'two') {
-    params.push('round=' + (election.stage === 'Second round' ? 2 : 1));
+    params.push('round=' + activeRoundForElection(election));
   }
   return base + '?' + params.join('&');
 }
@@ -389,7 +406,7 @@ function roundTabs(context) {
   const arts = findElection('arts');
   const singleCount = council ? council.approvedCandidates : 4;
   const firstCount = arts ? arts.approvedCandidates : 12;
-  const secondCount = 4;
+  const secondCount = 8;
   return (
     '<div class="round-switch">' +
     link('vote', `${singleCount}-candidate election`, context === 'single' ? 'selected' : '') +
@@ -482,13 +499,20 @@ function accountHtml() {
 }
 
 function login() {
-  return `<section class="entry-screen"><div class="wrap entry-grid"><div class="entry-intro"><div class="eyebrow">Election services portal</div><h1>Your voice.<br><span>Your school.</span></h1><p>Take part in your school’s elections. Review candidates, find upcoming elections and cast your vote.</p><div class="entry-links">${btn('elections', 'Explore elections →', true)}</div><div class="entry-process"><span>01 / PARTICIPATE</span><span>02 / CHOOSE</span><span>03 / BE COUNTED</span></div></div><form class="entry-login" data-form="login" novalidate><div class="eyebrow">Your election account</div><h2>Login</h2><p class="compact-copy">Enter your account details. Your student or administrator view opens automatically.</p><div class="formgrid">${field('Account', 'username', 'text', '', true)}${field('Password', 'password', 'password', '', true)}</div><div class="formfoot"><button class="btn entry-submit">Login →</button></div><button type="button" class="btn secondary entry-admin-demo" data-action="admin-demo">Admin demo</button><p class="entry-register">No account? ${link('register', 'Create an account →')}</p></form></div></section>`;
+  return `<section class="entry-screen"><div class="wrap entry-grid"><div class="entry-intro"><div class="eyebrow">Election services portal</div><h1>Your voice.<br><span>Your school.</span></h1><p>Take part in your school’s elections. Review candidates, find upcoming elections and cast your vote.</p><div class="entry-links">${btn('elections', 'Explore elections →', true)}</div><div class="entry-process"><span>01 / PARTICIPATE</span><span>02 / CHOOSE</span><span>03 / BE COUNTED</span></div></div><form class="entry-login" data-form="login" novalidate><div class="eyebrow">Your election account</div><h2>Login</h2><p class="compact-copy">Enter your account details. Your voter or administrator view opens automatically.</p><div class="formgrid">${field('Account Name', 'username', 'text', '', true)}${field('Password', 'password', 'password', '', true)}</div>${state.googleEnabled ? '<a class="btn secondary entry-admin-demo" href="/api/auth/google/start">Continue with Google</a>' : ''}<div class="formfoot"><button class="btn entry-submit">Login →</button></div>${state.demoMode ? '<button type="button" class="btn secondary entry-admin-demo" data-action="admin-demo">Admin demo</button>' : ''}<p class="entry-register">No account? ${link('register', 'Create an account →')}</p></form></div></section>`;
 }
 
 function register() {
   return (
-    heading('Create an account', 'Enter your details to create an election account.') +
-    `<form class="panel" data-form="register" novalidate><h2 class="panel-title">Account details</h2><div class="formgrid">${field('Full name', 'fullname')}${field('HKID', 'hkid')}${field('Email address', 'email', 'email')}${field('Username', 'newusername')}${field('Password', 'newpassword', 'password')}${field('Confirm password', 'repeatpassword', 'password')}</div><div class="formfoot"><button class="btn">Create account →</button> ${btn('login', 'Back to login', true)}</div></form>`
+    heading('Create an account', 'Enter your details. We will email you a code to verify your address.') +
+    `<form class="panel" data-form="register" novalidate><h2 class="panel-title">Account details</h2><div class="formgrid">${field('Full name', 'fullname')}${field('Email address', 'email', 'email', '', true, 'We will send a 6-digit verification code to this address.')}${field('Account Name', 'newusername')}${field('Password', 'newpassword', 'password')}${field('Confirm password', 'repeatpassword', 'password')}</div><div class="formfoot"><button class="btn">Create account →</button> ${btn('login', 'Back to login', true)}</div></form>`
+  );
+}
+
+function verifyEmailPage() {
+  return (
+    heading('Verify your email', 'Enter the 6-digit code we sent to your email address.') +
+    `<form class="panel" data-form="verify-email" novalidate><h2 class="panel-title">Email verification</h2><div class="formgrid">${field('Email address', 'email', 'email', state.pendingEmail || '', true)}${field('6-digit code', 'code', 'text', '', true, 'The code expires after 15 minutes.')}</div><div class="formfoot"><button class="btn">Verify and continue</button><button class="btn secondary" type="button" data-action="resend-verification">Resend code</button></div><p class="compact-copy">Already verified? ${link('login', 'Return to login')}</p></form>`
   );
 }
 
@@ -497,10 +521,10 @@ function success(type) {
   let receipt = '';
   if (type === 'register') {
     content = [
-      'Your account is ready',
-      'You can now log in and take part in the election services.',
-      'login',
-      'Continue to login'
+      'Check your email',
+      'Enter the verification code before logging in for the first time.',
+      'verify-email',
+      'Verify email'
     ];
   } else if (type === 'nomination') {
     const candidate = state.lastNomination || state.myNomination;
@@ -561,8 +585,15 @@ function dashboard() {
     });
   }
 
+  const currentActions = !current
+    ? ''
+    : isAdminUser()
+      ? `${link('details?election=' + current.slug, 'Election details')}${link('admin', 'Open administration →')}`
+      : current.status === 'nominations_open'
+        ? btn('nomination?election=' + current.slug, 'Submit a nomination →')
+        : btn(voteRouteForElection('vote', current), 'Cast your vote →');
   const currentCard = current
-    ? `${statusBadge(current)}<h3>${escapeHtml(current.title)}</h3><p class="compact-copy">${escapeHtml(current.description)}</p><dl class="box-facts"><div><dt>${current.status === 'nominations_open' ? 'Nomination period' : 'Voting period'}</dt><dd>${fmtRange(current.nominationOpen, current.nominationClose)}</dd></div><div><dt>${current.status === 'nominations_open' ? 'Nominations close' : 'Voting closes'}</dt><dd>${fmtDateTime(current.status === 'nominations_open' ? current.nominationClose : current.votingClose)}</dd></div><div><dt>Candidates</dt><dd>${current.approvedCandidates} candidates · ${current.seats} seat${current.seats === 1 ? '' : 's'}</dd></div></dl><div class="actions">${current.status === 'nominations_open' ? btn('nomination?election=' + current.slug, 'Submit a nomination →') : btn(voteRouteForElection('vote', current), 'Cast your vote →')}${link('details?election=' + current.slug, 'Election details')}${link('vote?round=1', 'Two-round election →')}</div>`
+    ? `${statusBadge(current)}<h3>${escapeHtml(current.title)}</h3><p class="compact-copy">${escapeHtml(current.description)}</p><dl class="box-facts"><div><dt>${current.status === 'nominations_open' ? 'Nomination period' : 'Voting period'}</dt><dd>${fmtRange(current.nominationOpen, current.nominationClose)}</dd></div><div><dt>${current.status === 'nominations_open' ? 'Nominations close' : 'Voting closes'}</dt><dd>${fmtDateTime(current.status === 'nominations_open' ? current.nominationClose : current.votingClose)}</dd></div><div><dt>Candidates</dt><dd>${current.approvedCandidates} candidates · ${current.seats} seat${current.seats === 1 ? '' : 's'}</dd></div></dl><div class="actions">${currentActions}${isAdminUser() ? '' : link('details?election=' + current.slug, 'Election details') + link('vote?round=1', 'Two-round election →')}</div>`
     : `${badge('No election open')}<h3>No election is currently open</h3><p class="compact-copy">Check the upcoming elections list for the next voting period.</p><div class="actions">${btn('upcoming', 'View upcoming elections →', true)}</div>`;
 
   const upcomingHtml = upcomingElections.length
@@ -608,8 +639,11 @@ function dashboard() {
         ? 'Your nomination has been approved.'
         : 'Your nomination was not approved.'
     : 'Prepare a nomination for the upcoming election.';
+  const nominationBox = isAdminUser()
+    ? `<section class="dashboard-box"><div class="box-title">${icon('file', 23)}<h2>Nomination review</h2></div><div class="box-body"><div class="dashboard-row"><div><h3>Administrator access</h3><p>Administrator accounts cannot apply as candidates. Review student applications instead.</p></div>${btn('admin-nominations', 'Review nominations →', true)}</div></div></section>`
+    : `<section class="dashboard-box"><div class="box-title">${icon('user', 23)}<h2>Become a candidate</h2></div><div class="box-body"><div class="dashboard-row"><div><h3>Join the election</h3><p>Create your candidate introduction, add a picture and share your plans.</p></div>${btn('nomination', 'Become a candidate →', true)}</div><div class="dashboard-row"><div><h3>My nomination</h3><p>${nominationStatus}</p></div>${link('nomination', myNomination ? 'Edit introduction →' : 'Create introduction →')}</div></div></section>`;
 
-  return `<section class="dashboard-screen"><div class="wrap"><div class="dashboard-heading"><div><div class="eyebrow">Your election services</div><h1>My dashboard</h1><p class="muted">Follow your elections and access all services in one place.</p></div>${badge((state.user?.role === 'admin' ? 'Administrator' : 'Student') + ' account', 'green')}</div><div class="dashboard-grid"><section class="dashboard-box"><div class="box-title">${icon('ballot', 23)}<h2>Current elections</h2></div><div class="box-body">${currentCard}</div></section><section class="dashboard-box"><div class="box-title">${icon('calendar', 23)}<h2>Upcoming elections</h2></div><div class="box-body">${upcomingHtml}<div class="actions">${btn('upcoming', 'View upcoming elections →', true)}</div></div></section><section class="dashboard-box"><div class="box-title">${icon('chart', 23)}<h2>Completed election results</h2></div><div class="box-body">${completedHtml}<div class="actions">${btn('results', 'View results list →', true)}</div></div></section><section class="dashboard-box"><div class="box-title">${icon('user', 23)}<h2>Become a candidate</h2></div><div class="box-body"><div class="dashboard-row"><div><h3>Join the election</h3><p>Create your candidate introduction, add a picture and share your plans.</p></div>${btn('nomination', 'Become a candidate →', true)}</div><div class="dashboard-row"><div><h3>My nomination</h3><p>${nominationStatus}</p></div>${link('nomination', myNomination ? 'Edit introduction →' : 'Create introduction →')}</div></div></section><section class="dashboard-box"><div class="box-title">${icon('info', 23)}<h2>Election notices</h2></div><div class="box-body">${notices
+  return `<section class="dashboard-screen"><div class="wrap"><div class="dashboard-heading"><div><div class="eyebrow">Your election services</div><h1>My dashboard</h1><p class="muted">Follow your elections and access all services in one place.</p></div>${badge((state.user?.role === 'admin' ? 'Administrator' : 'Student') + ' account', 'green')}</div><div class="dashboard-grid"><section class="dashboard-box"><div class="box-title">${icon('ballot', 23)}<h2>Current elections</h2></div><div class="box-body">${currentCard}</div></section><section class="dashboard-box"><div class="box-title">${icon('calendar', 23)}<h2>Upcoming elections</h2></div><div class="box-body">${upcomingHtml}<div class="actions">${btn('upcoming', 'View upcoming elections →', true)}</div></div></section><section class="dashboard-box"><div class="box-title">${icon('chart', 23)}<h2>Completed election results</h2></div><div class="box-body">${completedHtml}<div class="actions">${btn('results', 'View results list →', true)}</div></div></section>${nominationBox}<section class="dashboard-box"><div class="box-title">${icon('info', 23)}<h2>Election notices</h2></div><div class="box-body">${notices
     .slice(0, 3)
     .map(
       (item) =>
@@ -625,7 +659,10 @@ function elections() {
   const articles = list
     .map((election) => {
       const actions = [];
-      if (election.status === 'nominations_open') {
+      if (isAdminUser()) {
+        actions.push(btn('details?election=' + election.slug, 'Election details →', true));
+        actions.push(link('admin?election=' + election.slug, 'Open administration →'));
+      } else if (election.status === 'nominations_open') {
         actions.push(btn('nomination?election=' + election.slug, 'Submit a nomination →'));
         actions.push(link('details?election=' + election.slug, 'View dates and rules'));
       } else if (election.status === 'voting_open') {
@@ -661,7 +698,10 @@ function details(neighbourhood) {
     ? election.votingRules
     : DEFAULT_RULES;
   const actions = [];
-  if (election.status === 'nominations_open') {
+  if (isAdminUser()) {
+    actions.push(link('admin?election=' + election.slug, 'Open administration →'));
+    actions.push(btn('elections', 'Back to elections', true));
+  } else if (election.status === 'nominations_open') {
     actions.push(btn('nomination?election=' + election.slug, 'Prepare a nomination →'));
     actions.push(btn('elections', 'Back to elections', true));
   } else if (election.status === 'published') {
@@ -691,7 +731,7 @@ function candidateList() {
     ? list
         .map(
           (c, i) =>
-            `<article class="candidate-card"><span class="number">No. 0${i + 1}</span><div class="avatar">${escapeHtml(c.initials)}</div><h3>${escapeHtml(c.name)}</h3><p>${escapeHtml(c.tag)}</p>${link('profile?id=' + c.id, 'View profile & manifesto →')}</article>`
+            `<article class="candidate-card"><span class="number">No. 0${i + 1}</span>${c.picture ? `<img class="candidate-portrait" src="${escapeHtml(c.picture)}" alt="${escapeHtml(c.name)}">` : `<div class="avatar">${escapeHtml(c.initials)}</div>`}<h3>${escapeHtml(c.name)}</h3><p>${escapeHtml(c.tag)}</p>${link('profile?id=' + c.id, 'View profile & manifesto →')}</article>`
         )
         .join('')
     : '<div class="panel"><p>No approved candidates are available yet.</p></div>';
@@ -700,7 +740,7 @@ function candidateList() {
       'Candidate profiles',
       (election?.title || 'Election') + ' · Get to know the nominated candidates.'
     ) +
-    `<div class="meta"><span>${list.length} valid nomination${list.length === 1 ? '' : 's'}</span><span>Voting: ${fmtRange(election?.votingOpen, election?.votingClose)}</span></div><div class="candidate-grid">${cards}</div><div class="actions">${btn('vote', 'Proceed to voting →')}${btn('nomination', 'Candidate nomination', true)}</div>`
+    `<div class="meta"><span>${list.length} valid nomination${list.length === 1 ? '' : 's'}</span><span>Voting: ${fmtRange(election?.votingOpen, election?.votingClose)}</span></div><div class="candidate-grid">${cards}</div><div class="actions">${isAdminUser() ? link('admin', 'Open administration →') : btn('vote', 'Proceed to voting →') + btn('nomination', 'Candidate nomination', true)}</div>`
   );
 }
 
@@ -714,16 +754,16 @@ function profile(id) {
   const manifesto = candidate.manifesto.length ? candidate.manifesto : ['Manifesto to be confirmed.'];
   return (
     heading('Candidate profile', votingTitle(context)) +
-    `<div class="panel"><div class="profile-head"><div class="avatar">${escapeHtml(candidate.initials)}</div><div><div class="eyebrow" style="margin-bottom:3px">Candidate 0${index + 1}</div><h2>${escapeHtml(candidate.name)}</h2><p>${escapeHtml(candidate.tag)}</p></div></div></div><div class="panel"><h2 class="panel-title">Personal introduction</h2><p class="compact-copy">${escapeHtml(candidate.bio)}</p><h2 class="panel-title mt">Election manifesto</h2><ol class="rules">${manifesto
+    `<div class="panel"><div class="profile-head">${candidate.picture ? `<img class="intro-picture" src="${escapeHtml(candidate.picture)}" alt="${escapeHtml(candidate.name)}">` : `<div class="avatar">${escapeHtml(candidate.initials)}</div>`}<div><div class="eyebrow" style="margin-bottom:3px">Candidate 0${index + 1}</div><h2>${escapeHtml(candidate.name)}</h2><p>${escapeHtml(candidate.tag)}</p></div></div></div><div class="panel"><h2 class="panel-title">Personal introduction</h2><p class="compact-copy">${escapeHtml(candidate.bio)}</p>${candidate.portfolio ? `<h2 class="panel-title mt">Portfolio</h2><p class="compact-copy">${escapeHtml(candidate.portfolio)}</p>` : ''}<h2 class="panel-title mt">Election manifesto</h2><ol class="rules">${manifesto
       .map((item) => `<li>${escapeHtml(item)}</li>`)
-      .join('')}</ol></div><div class="actions">${btn(voteLink('vote', context), 'Back to voting candidates →')}${btn('candidates', 'Back to candidates', true)}</div>`
+      .join('')}</ol></div><div class="actions">${isAdminUser() ? link('admin-nominations', 'Back to nominations →') + btn('candidates', 'Back to candidates', true) : btn(voteLink('vote', context), 'Back to voting candidates →') + btn('candidates', 'Back to candidates', true)}</div>`
   );
 }
 
 function introPreview(d) {
-  const picture = state.nominationPicture;
+  const picture = d.pictureUrl || state.nominationPicture;
   const platforms = ['Instagram', 'Facebook'].filter((platform) => d['show' + platform]);
-  return `<article class="intro-profile"><div class="intro-profile-top"><h2>${escapeHtml(d.candidateName || 'Your name')}</h2>${picture ? `<img class="intro-picture" src="${picture}" alt="Candidate profile picture">` : `<div class="intro-picture intro-placeholder">${icon('user', 42)}</div>`}</div><p class="intro-personal"><em>${escapeHtml(d.introduction || 'Your personal introduction will appear here.')}</em></p><div class="intro-statement">${escapeHtml(d.manifesto || 'Your election statement and plans for the school will appear here.')}</div><p class="intro-slogan">${escapeHtml(d.campaign || 'Your campaign slogan')}</p><div class="intro-contacts">${platforms
+  return `<article class="intro-profile"><div class="intro-profile-top"><h2>${escapeHtml(d.candidateName || 'Your name')}</h2>${picture ? `<img class="intro-picture" src="${escapeHtml(picture)}" alt="Candidate profile picture">` : `<div class="intro-picture intro-placeholder">${icon('user', 42)}</div>`}</div><p class="intro-personal"><em>${escapeHtml(d.introduction || 'Your personal introduction will appear here.')}</em></p><div class="intro-statement">${escapeHtml(d.manifesto || 'Your election statement and plans for the school will appear here.')}</div>${d.portfolio ? `<p class="compact-copy"><strong>Portfolio:</strong> ${escapeHtml(d.portfolio)}</p>` : ''}<p class="intro-slogan">${escapeHtml(d.campaign || 'Your campaign slogan')}</p><div class="intro-contacts">${platforms
     .map(
       (platform) =>
         `<p><strong>${platform}</strong><span>${escapeHtml(d[platform.toLowerCase() + 'Contact'] || 'Your contact')}</span></p>`
@@ -739,6 +779,16 @@ function refreshIntroPreview(form) {
 function nominationPage() {
   const election = state.nominationElection;
   const candidate = state.nominationCandidate;
+  if (isAdminUser()) {
+    return (
+      heading('Become a candidate', 'Administrator accounts cannot apply as candidates.') +
+      notice(
+        'Administrator access is read-only here',
+        'Use the administration area to review student applications and manage elections.'
+      ) +
+      `<div class="actions">${btn('admin-nominations', 'Review nominations →')}${btn('dashboard', 'Back to dashboard', true)}</div>`
+    );
+  }
   if (!election) {
     return heading('Become a candidate', 'Nomination information is unavailable.');
   }
@@ -748,7 +798,8 @@ function nominationPage() {
     const close = election.nominationClose ? new Date(election.nominationClose).getTime() : null;
     return !close || Date.now() <= close;
   })();
-  const canEdit = isOpen && state.nominationCanEdit && candidate?.status !== 'rejected';
+  const canEdit =
+    isOpen && state.nominationCanEdit && (!candidate || candidate.status === 'pending');
   const deadline = election.nominationClose ? fmtDateTime(election.nominationClose) : 'the deadline';
   const contacts = candidate?.contacts || {};
   const instagram = contacts.instagram || {};
@@ -758,15 +809,48 @@ function nominationPage() {
     candidateMember: nomination.candidateMember || '',
     introduction: nomination.introduction || '',
     manifesto: nomination.manifesto || '',
+    portfolio: nomination.portfolio || '',
     campaign: nomination.campaign || '',
+    pictureUrl:
+      nomination.pictureUrl || (candidate?.picture && /^https?:/i.test(candidate.picture)
+        ? candidate.picture
+        : ''),
     showInstagram: Boolean(nomination.showInstagram),
     instagramContact: nomination.instagramContact || '',
     showFacebook: Boolean(nomination.showFacebook),
     facebookContact: nomination.facebookContact || '',
     declaration: Boolean(nomination.declaration || candidate)
   };
+  const statusNote = candidate
+    ? candidate.status === 'approved'
+      ? notice(
+          'Application approved',
+          'Your application has been approved and you appear on the ballot. Your details are now read-only.'
+        )
+      : candidate.status === 'rejected'
+        ? notice(
+            'Application rejected',
+            (candidate.reviewNote ? escapeHtml(candidate.reviewNote) + ' ' : '') +
+              'Contact the election administrator if you need more information.'
+          )
+        : candidate.reviewNote
+          ? notice(
+              'Changes requested',
+              escapeHtml(candidate.reviewNote) +
+                ' Update your application and submit it again for review.'
+            )
+          : notice(
+              'Application under review',
+              'Your application has been submitted and is waiting for administrator review.'
+            )
+    : '';
   const lockedNote = candidate && !canEdit
-    ? notice('Nominations closed', 'The nomination deadline has passed or the nomination has been reviewed. Your details can no longer be edited.')
+    ? !isOpen
+      ? notice(
+          'Nominations closed',
+          'The nomination deadline has passed. Your details can no longer be edited.'
+        )
+      : ''
     : !candidate && !isOpen
       ? notice('Nominations closed', 'The nomination period for this election is not open.')
       : '';
@@ -778,8 +862,9 @@ function nominationPage() {
       'Become a candidate',
       election.title + ' · Nominations close on ' + deadline + '.'
     ) +
+    statusNote +
     lockedNote +
-    `<div class="candidate-intro-layout"><form class="panel" data-form="nomination" novalidate><input type="hidden" name="electionId" value="${election.slug}"><input type="hidden" name="nominationId" value="${candidate?.id || ''}"><h2 class="panel-title">${candidate ? 'Edit your candidate introduction' : 'Create your candidate introduction'}</h2><div class="formgrid">${field('Name', 'candidateName', 'text', values.candidateName)}${field('Student ID', 'candidateMember', 'text', values.candidateMember)}<div class="field full"><label for="candidatePicture">Profile picture or logo</label><input id="candidatePicture" type="file" accept="image/png,image/jpeg,image/webp"><small>Choose your own picture or logo.</small></div>${area('Introduction', 'introduction', values.introduction, 'A short personal introduction, displayed in italic text.')}${area('Election statement', 'manifesto', values.manifesto, 'Describe what you hope to achieve for the school.')}${field('Slogan', 'campaign', 'text', values.campaign, true, 'Your slogan will appear in blue.')}<fieldset class="social-fields field full"><legend>Contacts to show on your profile</legend>${['Instagram', 'Facebook']
+    `<div class="candidate-intro-layout"><form class="panel" data-form="nomination" novalidate><input type="hidden" name="electionId" value="${election.slug}"><input type="hidden" name="nominationId" value="${candidate?.id || ''}"><h2 class="panel-title">${candidate ? 'Edit your candidate introduction' : 'Create your candidate introduction'}</h2><div class="formgrid">${field('Name', 'candidateName', 'text', values.candidateName)}${field('Member ID', 'candidateMember', 'text', values.candidateMember, true, 'Your unique membership number for this election.')}${field('Photo URL', 'pictureUrl', 'url', values.pictureUrl, true, 'Optional. You can also upload a file below.')}${area('Introduction / design philosophy', 'introduction', values.introduction, 'A short personal introduction, displayed in italic text.')}${area('Election statement', 'manifesto', values.manifesto, 'Describe what you hope to achieve for the school.')}${area('Portfolio', 'portfolio', values.portfolio, 'Summarise relevant experience, activities or work.')}${field('Slogan', 'campaign', 'text', values.campaign, true, 'Your slogan will appear in blue.')}<div class="field full"><label for="candidatePicture">Profile picture or logo</label><input id="candidatePicture" type="file" accept="image/png,image/jpeg,image/webp"><small>Choose your own picture or logo, or provide a photo URL above.</small></div><fieldset class="social-fields field full"><legend>Contacts to show on your profile</legend>${['Instagram', 'Facebook']
       .map((platform) => {
         const key = platform.toLowerCase();
         const contact = key === 'instagram' ? instagram : facebook;
@@ -800,6 +885,16 @@ function voting() {
   const context = state.voteContext;
   const list = state.voteCandidates;
   const election = state.voteElection;
+  if (isAdminUser()) {
+    return (
+      heading('Voting candidates', 'Administrator accounts cannot cast votes.') +
+      notice(
+        'Administrator access is read-only here',
+        'You can review candidate profiles and monitor the election from the administration area.'
+      ) +
+      `<div class="actions">${btn('candidates', 'View candidates', true)}${btn('admin', 'Administration →')}</div>`
+    );
+  }
   if (!election) {
     return heading('Voting candidates', 'Voting information is unavailable.');
   }
@@ -810,7 +905,14 @@ function voting() {
     context === 'first'
       ? notice(
           `First round · ${list.length} candidates`,
-          'Choose one candidate from the names-only ballot. The top four advance to the second round.'
+          'Choose one candidate from the names-only ballot. The top eight advance to the second round.'
+        )
+      : '';
+  const codeNotice =
+    election.voterMode === 'roll'
+      ? notice(
+          'One-time voting code required',
+          'Use the code emailed to the address on the voter roll. Log in with that same email address. The code can be used once per round.'
         )
       : '';
   const listHtml =
@@ -856,6 +958,7 @@ function voting() {
     roundTabs(context) +
     badge(roundLabel(context), 'red') +
     roundNotice +
+    codeNotice +
     `<div class="meta mt"><span>${list.length} candidates · ${election.seats} seat${election.seats === 1 ? '' : 's'}</span></div>` +
     listHtml +
     (myVote
@@ -868,6 +971,9 @@ function ballotPage() {
   const context = state.voteContext;
   const list = state.voteCandidates;
   const election = state.voteElection;
+  if (isAdminUser()) {
+    return heading('Vote now', 'Administrator accounts cannot cast votes.');
+  }
   const myVote = state.myVotes.find(
     (vote) => vote.electionSlug === election?.slug && vote.round === roundNumber(context)
   );
@@ -890,11 +996,14 @@ function ballotPage() {
         (c, i) =>
           `<label class="candidate-name-row"><input type="radio" name="candidate" value="${c.id}" required ${state.selectedVote?.candidateId === c.id ? 'checked' : ''}><span><small>${String(i + 1).padStart(2, '0')}</small><strong>${escapeHtml(c.name)}</strong></span></label>`
       )
-      .join('')}</fieldset><div class="formfoot"><button class="btn">Continue to confirmation →</button> ${btn(voteLink('vote', context), 'Back to candidates', true)}</div></div></form>`
+      .join('')}</fieldset>${election.voterMode === 'roll' ? `<div class="formgrid">${field('One-time voting code', 'voterCode', 'text', state.selectedVote?.voterCode || '', true, 'Enter the code emailed to the address on the voter roll.')}</div>` : ''}<div class="formfoot"><button class="btn">Continue to confirmation →</button> ${btn(voteLink('vote', context), 'Back to candidates', true)}</div></div></form>`
   );
 }
 
 function confirm() {
+  if (isAdminUser()) {
+    return heading('Confirm your vote', 'Administrator accounts cannot cast votes.');
+  }
   const selection = state.selectedVote;
   const candidate = state.voteCandidates.find((item) => item.id === selection?.candidateId);
   if (!candidate) return ballotPage();
@@ -903,6 +1012,9 @@ function confirm() {
     heading('Confirm your vote', votingTitle(state.voteContext) + ' · ' + roundLabel(state.voteContext)) +
     steps(1) +
     notice('Please review your selection', 'Check the candidate below before submitting.') +
+    (state.voteElection?.voterMode === 'roll'
+      ? `<div class="panel"><h2 class="panel-title">One-time voting code</h2><p class="compact-copy">Code: <b>${escapeHtml(selection?.voterCode || '')}</b></p>${btn(voteLink('ballot', state.voteContext), 'Change code', true)}</div>`
+      : '') +
     '<div class="panel"><h2 class="panel-title">Your selected candidate</h2><div class="profile-head"><div class="avatar">' +
     escapeHtml(candidate.initials) +
     '</div><div><span class="eyebrow">Candidate ' +
@@ -924,7 +1036,7 @@ function status() {
   const blocks = [];
   if (!data.user.isEligible) {
     blocks.push(
-      `<div class="status-example error-state">${badge('Not on the election roll', 'red')}<h3>Voting is unavailable for this account</h3><p>Your student account is not on the school election roll for this election. Review the eligibility criteria in the election information.</p>${link('details?election=' + election.slug, 'View eligibility information →')}</div>`
+      `<div class="status-example error-state">${badge('Not eligible', 'red')}<h3>Voting is unavailable for this account</h3><p>Your account is not eligible to vote in this election. Review the eligibility criteria in the election information.</p>${link('details?election=' + election.slug, 'View eligibility information →')}</div>`
     );
   } else if (data.myVote) {
     blocks.push(
@@ -932,7 +1044,7 @@ function status() {
     );
   } else if (data.reason === 'ELIGIBLE') {
     blocks.push(
-      `<div class="status-example success-state">${badge('Eligible to vote', 'green')}<h3>Your ballot is available</h3><p>You are on the election roll and voting is currently open.</p>${btn(voteRouteForElection('vote', election), 'Proceed to voting →')}</div>`
+      `<div class="status-example success-state">${badge('Eligible to vote', 'green')}<h3>Your ballot is available</h3><p>You are on the voter roll and voting is currently open.${data.requiresVoterCode ? ' Enter the one-time code emailed to this address when you vote.' : ''}</p>${btn(voteRouteForElection('vote', election), 'Proceed to voting →')}</div>`
     );
   } else if (data.reason === 'VOTING_CLOSED') {
     blocks.push(
@@ -1045,9 +1157,30 @@ function admin() {
       return `<tr><td>${escapeHtml(election.title)}</td><td>${statusBadge(election)}</td><td>${action}</td></tr>`;
     })
     .join('');
+  const pending = overview.pendingNominations || [];
+  const pendingRows = pending.length
+    ? pending
+        .slice(0, 8)
+        .map(
+          (candidate) =>
+            `<tr><td><strong>${escapeHtml(candidate.name)}</strong><br><small>${escapeHtml(candidate.electionTitle || '')}</small></td><td>${escapeHtml(candidate.memberId || '—')}</td><td>${badge('Pending')}</td><td>${link('admin-review?id=' + candidate.id, 'Review →')}</td></tr>`
+        )
+        .join('')
+    : '<tr><td colspan="4">No applications are waiting for review.</td></tr>';
   return (
     heading('Administration', 'Create elections, review nominations and manage election stages.') +
-    `<div class="section-head"><h2>Election overview</h2>${btn('setup', '+ Create election')}</div><div class="stats"><div class="stat"><small>Open elections</small><b>${overview.stats.openElections}</b><span>Voting in progress</span></div><div class="stat"><small>Candidate nominations</small><b>${overview.stats.nominations}</b><span>${overview.stats.pending} pending review</span></div><div class="stat"><small>Published elections</small><b>${overview.stats.published}</b><span>Results available</span></div></div><div class="panel"><h2 class="panel-title">Manage elections</h2><div class="actions">${btn('candidate-entry', 'Enter candidate descriptions', true)}${btn('setup', 'Candidate entry settings', true)}</div><div class="table-scroll"><table><thead><tr><th>Election</th><th>Stage</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table></div></div><div class="actions">${btn('admin-nominations', 'Review nominations', true)}${btn('counting', 'Vote counting & publication', true)}</div>`
+    `<div class="section-head"><h2>Election overview</h2>${btn('setup', '+ Create election')}</div><div class="stats"><div class="stat"><small>Open elections</small><b>${overview.stats.openElections}</b><span>Voting in progress</span></div><div class="stat"><small>Candidate nominations</small><b>${overview.stats.nominations}</b><span>${overview.stats.pending} pending review</span></div><div class="stat"><small>Published elections</small><b>${overview.stats.published}</b><span>Results available</span></div></div><div class="panel"><h2 class="panel-title">Manage elections</h2><div class="actions">${btn('candidate-entry', 'Enter candidate descriptions', true)}${btn('setup', 'Candidate entry settings', true)}</div><div class="table-scroll"><table><thead><tr><th>Election</th><th>Stage</th><th>Action</th></tr></thead><tbody>${rows}</tbody></table></div></div><div class="panel"><div class="section-head"><h2>Applications to review</h2>${btn('admin-nominations', 'Open review queue →', true)}</div><div class="table-scroll"><table><thead><tr><th>Applicant</th><th>Member ID</th><th>Status</th><th>Action</th></tr></thead><tbody>${pendingRows}</tbody></table></div></div><div class="actions">${btn('admin-nominations', 'Review nominations', true)}${btn('counting', 'Vote counting & publication', true)}</div>`
+  );
+}
+
+function voterModeFields(d) {
+  const mode = d.voterMode || 'open';
+  return (
+    '<fieldset class="entry-mode field full"><legend>Who can vote?</legend><label class="entry-option"><input type="radio" name="voterMode" value="open" ' +
+    (mode === 'open' ? 'checked' : '') +
+    '><span><strong>Open voting</strong><small>Any verified voter account may vote once per round.</small></span></label><label class="entry-option"><input type="radio" name="voterMode" value="roll" ' +
+    (mode === 'roll' ? 'checked' : '') +
+    '><span><strong>Voter roll with one-time codes</strong><small>Only voters on the imported list can vote. Each receives a one-time code by email.</small></span></label></fieldset>'
   );
 }
 
@@ -1059,10 +1192,8 @@ function entryModeFields(d) {
     '><span><strong>Administrator enters candidates</strong><small>Enter every candidate’s name, picture, introduction and statement.</small></span></label><label class="entry-option"><input type="radio" name="entryMode" value="students" ' +
     (mode === 'students' ? 'checked' : '') +
     '><span><strong>Students apply as candidates</strong><small>Students create their introductions through “Become a candidate”.</small></span></label></fieldset>' +
-    field('Number of candidates', 'candidateCount', 'number', d.candidateCount || '4', false) +
-    '<div class="field"><label>Finalists in second round</label><p>4 candidates</p></div>' +
     '<div class="field full" id="round-setup-summary">' +
-    roundSetupSummary(d.candidateCount || 4) +
+    roundSetupSummary() +
     '</div><div class="field full" id="admin-entry-link" ' +
     (mode === 'admin' ? '' : 'hidden') +
     '>' +
@@ -1077,15 +1208,11 @@ function entryModeFields(d) {
   );
 }
 
-function roundSetupSummary(count) {
+function roundSetupSummary() {
   return (
-    '<div class="notice"><p><strong>' +
-    (Number(count) > 4 ? 'Two rounds' : 'Single round') +
-    '</strong>' +
-    (Number(count) > 4
-      ? 'First round: all candidates shown as names. Second round: four finalists shown with profiles.'
-      : 'Up to four candidate profiles are shown before the name-selection ballot.') +
-    '</p></div>'
+    '<div class="notice"><p><strong>Rounds are decided by approved candidates</strong>' +
+    'More than eight approved candidates: first round, then the top eight in a second round. ' +
+    'Eight or fewer: one voting round. The round is locked when voting starts.</p></div>'
   );
 }
 
@@ -1101,10 +1228,13 @@ function setup() {
         nomClose: toInputDate(election.nominationClose),
         voteOpen: toInputDateTime(election.votingOpen),
         voteClose: toInputDateTime(election.votingClose),
+        round2Open: toInputDateTime(election.round2Open),
+        round2Close: toInputDateTime(election.round2Close),
         publishAt: toInputDateTime(election.resultsAt),
         voterGroup: election.eligibleGroup,
+        voterMode: election.voterMode || 'open',
         entryMode: election.entryMode,
-        candidateCount: String(election.candidateCount),
+        stage: election.stage,
         votingRules: election.votingRules.join('\n')
       }
     : {
@@ -1116,20 +1246,23 @@ function setup() {
         nomClose: offsetDateInput(7),
         voteOpen: offsetDateTimeInput(8),
         voteClose: offsetDateTimeInput(14, 18),
-        publishAt: offsetDateTimeInput(15, 12),
-        voterGroup: 'All registered students',
+        round2Open: offsetDateTimeInput(15),
+        round2Close: offsetDateTimeInput(18, 18),
+        publishAt: offsetDateTimeInput(19, 12),
+        voterGroup: 'All registered voters',
+        voterMode: 'open',
         entryMode: 'students',
-        candidateCount: '4',
+        stage: 'Nominations open',
         votingRules: defaultRulesText()
       };
-  const voterGroups = ['All registered students', 'Student Council members', 'School House Captain members'];
+  const voterGroups = ['All registered voters', 'Student Council members', 'School House Captain members'];
   if (!voterGroups.includes(d.voterGroup)) voterGroups.push(d.voterGroup);
   return (
     heading(
       election ? 'Edit election setup' : 'Create an election',
       'Define the election information, timetable and rules.'
     ) +
-    `<form class="panel" data-form="setup" novalidate data-slug="${election ? election.slug : ''}"><h2 class="panel-title">Election particulars</h2><div class="formgrid">${field('Election title', 'electionTitle', 'text', d.electionTitle, true)}${area('Election description', 'description', d.description)}${field('Number of seats', 'seats', 'number', d.seats)}${select('Election method', 'method', ['Single candidate selection'], d.method)}${field('Nominations open', 'nomOpen', 'date', d.nomOpen)}${field('Nomination deadline', 'nomClose', 'date', d.nomClose)}${field('Voting opens (HKT)', 'voteOpen', 'datetime-local', d.voteOpen)}${field('Voting closes (HKT)', 'voteClose', 'datetime-local', d.voteClose)}${field('Results announcement (HKT)', 'publishAt', 'datetime-local', d.publishAt)}${select('Eligible voter group', 'voterGroup', voterGroups, d.voterGroup)}${entryModeFields(d)}${area('Voting rules', 'votingRules', d.votingRules)}</div><div class="formfoot"><button class="btn">Save election draft →</button> ${btn('admin', 'Cancel', true)}</div></form>`
+    `<form class="panel" data-form="setup" novalidate data-slug="${election ? election.slug : ''}"><h2 class="panel-title">Election particulars</h2><div class="formgrid">${field('Election title', 'electionTitle', 'text', d.electionTitle, true)}${area('Election description', 'description', d.description)}${field('Number of seats', 'seats', 'number', d.seats)}${select('Election method', 'method', ['Single candidate selection'], d.method)}${field('Nominations open', 'nomOpen', 'date', d.nomOpen)}${field('Nomination deadline', 'nomClose', 'date', d.nomClose)}${field('Voting opens (HKT)', 'voteOpen', 'datetime-local', d.voteOpen)}${field('Voting closes (HKT)', 'voteClose', 'datetime-local', d.voteClose)}${field('Second round opens (HKT)', 'round2Open', 'datetime-local', d.round2Open)}${field('Second round closes (HKT)', 'round2Close', 'datetime-local', d.round2Close)}${field('Results announcement (HKT)', 'publishAt', 'datetime-local', d.publishAt)}${select('Eligible voter group', 'voterGroup', voterGroups, d.voterGroup)}${voterModeFields(d)}${election ? '' : select('Initial stage', 'stage', ['Draft', 'Nominations open'], d.stage)}${entryModeFields(d)}${area('Voting rules', 'votingRules', d.votingRules)}</div><div class="formfoot"><button class="btn">Save election draft →</button> ${btn('admin', 'Cancel', true)}</div></form>`
   );
 }
 
@@ -1150,18 +1283,17 @@ function manage() {
   ];
   return (
     heading('Manage election', election.title) +
-    `<div class="tabs">${link('manage?election=' + election.slug, 'Overview', 'selected')}${link('admin-nominations?election=' + election.slug, 'Nominations')}${link('counting?election=' + election.slug, 'Counting & results')}</div><div class="panel"><div class="section-head"><h2>Election stage</h2>${statusBadge(election)}</div>${timelineFor(election)}<form data-form="stage" data-slug="${election.slug}"><div class="formgrid">${select('Preview election stage', 'stage', stageOptions, election.stage)}</div><div class="actions"><button class="btn">Update stage</button></div></form></div><div class="panel"><h2 class="panel-title">Election summary</h2><dl class="facts"><div><dt>Registered voters</dt><dd>${eligible} eligible students</dd></div><div><dt>Approved candidates</dt><dd>${approved} candidate${approved === 1 ? '' : 's'}</dd></div><div><dt>Voting period</dt><dd>${fmtRange(election.votingOpen, election.votingClose)}</dd></div><div><dt>Results announcement</dt><dd>${fmtDateTime(election.resultsAt)}</dd></div></dl><div class="actions">${btn('counting?election=' + election.slug, 'View counting screen →')}${btn('candidate-entry?election=' + election.slug, 'Edit candidate descriptions', true)}${btn('vote?round=1', 'First-round preview', true)}${btn('vote?round=2', 'Second-round preview', true)}${btn('setup?edit=' + election.slug, 'Edit upcoming election', true)}</div></div>`
+    `<div class="tabs">${link('manage?election=' + election.slug, 'Overview', 'selected')}${link('admin-nominations?election=' + election.slug, 'Nominations')}${link('counting?election=' + election.slug, 'Counting & results')}${link('voter-roll?election=' + election.slug, 'Voter roll')}</div><div class="panel"><div class="section-head"><h2>Election stage</h2>${statusBadge(election)}</div>${timelineFor(election)}<form data-form="stage" data-slug="${election.slug}"><div class="formgrid">${select('Preview election stage', 'stage', stageOptions, election.stage)}</div><div class="actions"><button class="btn">Update stage</button></div></form></div><div class="panel"><h2 class="panel-title">Election summary</h2><dl class="facts"><div><dt>Eligible voters</dt><dd>${eligible} ${election.voterMode === 'roll' ? 'on the roll' : 'verified voters'}</dd></div><div><dt>Voter mode</dt><dd>${election.voterMode === 'roll' ? 'Voter roll with one-time codes' : 'Open voting'}</dd></div><div><dt>Approved candidates</dt><dd>${approved} candidate${approved === 1 ? '' : 's'}</dd></div><div><dt>Voting period</dt><dd>${fmtRange(election.votingOpen, election.votingClose)}</dd></div><div><dt>Results announcement</dt><dd>${fmtDateTime(election.resultsAt)}</dd></div></dl><div class="actions">${btn('counting?election=' + election.slug, 'View counting screen →')}${btn('candidate-entry?election=' + election.slug, 'Edit candidate descriptions', true)}${btn('vote?round=1', 'First-round preview', true)}${btn('vote?round=2', 'Second-round preview', true)}${btn('setup?edit=' + election.slug, 'Edit upcoming election', true)}</div></div>`
   );
 }
 
 function review() {
   const election = state.adminElection;
-  if (!election) return heading('Review nominations', 'Election information is unavailable.');
   const list = state.adminCandidates;
   const rows = list
     .map(
       (candidate) =>
-        `<tr><td>${escapeHtml(candidate.name)}</td><td>${fmtDate(candidate.submittedAt || candidate.updatedAt)}</td><td>${badge(candidate.status === 'approved' ? 'Approved' : candidate.status === 'rejected' ? 'Rejected' : 'Pending review', candidate.status === 'approved' ? 'green' : candidate.status === 'rejected' ? 'red' : 'gold')}</td><td>${link('profile?id=' + candidate.id, 'Review →')}</td></tr>`
+        `<tr><td><strong>${escapeHtml(candidate.name)}</strong>${!election && candidate.electionTitle ? `<br><small>${escapeHtml(candidate.electionTitle)}</small>` : ''}<br><small>Member ID: ${escapeHtml(candidate.memberId || '—')}</small></td><td>${escapeHtml(candidate.tag || candidate.bio || 'Candidate nomination')}</td><td>${fmtDate(candidate.submittedAt || candidate.updatedAt)}</td><td>${badge(candidate.status === 'approved' ? 'Approved' : candidate.status === 'rejected' ? 'Rejected' : 'Pending review', candidate.status === 'approved' ? 'green' : candidate.status === 'rejected' ? 'red' : 'gold')}</td><td>${link('admin-review?id=' + candidate.id, 'Review →')}</td></tr>`
     )
     .join('');
   const pending = list.filter((candidate) => candidate.status === 'pending');
@@ -1169,13 +1301,45 @@ function review() {
     ? `<div class="panel"><div class="section-head"><h2>Nominations awaiting review</h2>${badge(pending.length + ' pending', 'gold')}</div>${pending
         .map(
           (candidate) =>
-            `<div class="dashboard-row"><h3>${escapeHtml(candidate.name)}</h3><p>${escapeHtml(candidate.tag || candidate.bio || 'Candidate nomination')}</p><div class="actions"><button class="btn secondary small" type="button" data-action="nomination-status" data-id="${candidate.id}" data-status="approved">Approve</button><button class="btn secondary small" type="button" data-action="nomination-status" data-id="${candidate.id}" data-status="rejected">Reject</button></div></div>`
+            `<div class="dashboard-row"><h3>${escapeHtml(candidate.name)}</h3><p>${escapeHtml(candidate.tag || candidate.bio || 'Candidate nomination')}</p><div class="actions"><button class="btn secondary small" type="button" data-action="nomination-status" data-id="${candidate.id}" data-status="approved">Approve</button><button class="btn secondary small" type="button" data-action="nomination-status" data-id="${candidate.id}" data-status="rejected">Reject</button>${link('admin-review?id=' + candidate.id, 'Open review form →')}</div></div>`
         )
         .join('')}</div>`
     : '';
+  const tabs = election
+    ? `<div class="tabs">${link('manage?election=' + election.slug, 'Overview')}${link('admin-nominations?election=' + election.slug, 'Nominations', 'selected')}${link('counting?election=' + election.slug, 'Counting & results')}${link('voter-roll?election=' + election.slug, 'Voter roll')}</div>`
+    : '';
   return (
-    heading('Review nominations', election.title + ' · Submitted candidate profiles.') +
-    `<div class="tabs">${link('manage?election=' + election.slug, 'Overview')}${link('admin-nominations?election=' + election.slug, 'Nominations', 'selected')}${link('counting?election=' + election.slug, 'Counting & results')}</div><div class="panel"><div class="section-head"><h2>Candidate nominations</h2>${badge(list.length + ' nominations')}</div><div class="table-scroll"><table><thead><tr><th>Candidate</th><th>Submitted</th><th>Status</th><th>Profile</th></tr></thead><tbody>${rows || '<tr><td colspan="4">No nominations have been submitted.</td></tr>'}</tbody></table></div></div>${pendingHtml}`
+    heading(
+      'Review nominations',
+      election ? election.title + ' · Submitted candidate profiles.' : 'All applications waiting for an administrator decision.'
+    ) +
+    tabs +
+    `<div class="panel"><div class="section-head"><h2>Candidate nominations</h2>${badge(list.length + ' nominations')}</div><div class="table-scroll"><table><thead><tr><th>Candidate</th><th>Summary</th><th>Submitted</th><th>Status</th><th>Review</th></tr></thead><tbody>${rows || '<tr><td colspan="5">No nominations have been submitted.</td></tr>'}</tbody></table></div></div>${pendingHtml}`
+  );
+}
+
+function adminReview() {
+  const data = state.adminReview;
+  const candidate = data?.candidate;
+  if (!candidate) {
+    return heading('Review application', 'This application is unavailable.');
+  }
+  const election = data.election;
+  const applicant = data.applicant;
+  const manifesto = candidate.manifesto || [];
+  const statusBadgeHtml = badge(
+    candidate.status === 'approved' ? 'Approved' : candidate.status === 'rejected' ? 'Rejected' : 'Pending review',
+    candidate.status === 'approved' ? 'green' : candidate.status === 'rejected' ? 'red' : 'gold'
+  );
+  const contacts = candidate.contacts || {};
+  const contactRows = Object.entries(contacts)
+    .filter(([, value]) => value && value.value)
+    .map(([key, value]) => `<div><dt>${escapeHtml(key)}</dt><dd>${escapeHtml(value.value)}</dd></div>`)
+    .join('');
+  return (
+    heading('Review application', election.title + ' · ' + candidate.name) +
+    `<div class="tabs">${link('manage?election=' + election.slug, 'Overview')}${link('admin-nominations?election=' + election.slug, 'Nominations', 'selected')}${link('counting?election=' + election.slug, 'Counting & results')}${link('voter-roll?election=' + election.slug, 'Voter roll')}</div>` +
+    `<div class="candidate-intro-layout"><div class="panel"><div class="profile-head">${candidate.picture ? `<img class="intro-picture" src="${escapeHtml(candidate.picture)}" alt="${escapeHtml(candidate.name)}">` : `<div class="avatar">${escapeHtml(candidate.initials)}</div>`}<div><span class="eyebrow">Application ${candidate.id}</span><h2>${escapeHtml(candidate.name)}</h2><p>${escapeHtml(candidate.tag || '')}</p>${statusBadgeHtml}</div></div><dl class="facts mt"><div><dt>Member ID</dt><dd>${escapeHtml(candidate.memberId || '—')}</dd></div><div><dt>Submitted</dt><dd>${fmtDateTime(candidate.submittedAt || candidate.updatedAt)}</dd></div><div><dt>Applicant account</dt><dd>${escapeHtml(applicant?.username || applicant?.fullName || 'Administrator entry')}</dd></div><div><dt>Applicant email</dt><dd>${escapeHtml(applicant?.email || '—')}</dd></div></dl><h2 class="panel-title mt">Introduction / design philosophy</h2><p class="compact-copy">${escapeHtml(candidate.bio || 'Not provided.')}</p><h2 class="panel-title mt">Portfolio</h2><p class="compact-copy">${escapeHtml(candidate.portfolio || 'Not provided.')}</p><h2 class="panel-title mt">Election statement</h2><ol class="rules">${manifesto.map((item) => `<li>${escapeHtml(item)}</li>`).join('') || '<li>Not provided.</li>'}</ol>${contactRows ? `<h2 class="panel-title mt">Contacts</h2><dl class="facts">${contactRows}</dl>` : ''}</div><aside class="candidate-preview-panel"><div class="eyebrow">Administrator decision</div><form data-form="review" data-id="${candidate.id}" data-updated-at="${escapeHtml(candidate.updatedAt || '')}"><div class="formgrid">${area('Review note', 'reviewNote', candidate.reviewNote || '', 'Stored with the decision and shown to the applicant when changes are requested or the application is rejected.')}</div><div class="actions"><button class="btn" type="button" data-action="nomination-status" data-id="${candidate.id}" data-status="approved">Approve</button><button class="btn secondary" type="button" data-action="nomination-status" data-id="${candidate.id}" data-status="pending">Return for changes</button><button class="btn secondary" type="button" data-action="nomination-status" data-id="${candidate.id}" data-status="rejected">Reject</button></div></form>${notice('Round rule', 'Approved candidates determine the round: more than eight means a first round and a top-eight second round; otherwise one round.')}</aside></div>`
   );
 }
 
@@ -1197,10 +1361,97 @@ function counting() {
   const isPublished = election.published;
   return (
     heading('Vote counting & publication', election.title + ' · Post-voting review.') +
-    `<div class="tabs">${link('manage?election=' + election.slug, 'Overview')}${link('admin-nominations?election=' + election.slug, 'Nominations')}${link('counting?election=' + election.slug, 'Counting & results', 'selected')}</div>` +
+    `<div class="tabs">${link('manage?election=' + election.slug, 'Overview')}${link('admin-nominations?election=' + election.slug, 'Nominations')}${link('counting?election=' + election.slug, 'Counting & results', 'selected')}${link('voter-roll?election=' + election.slug, 'Voter roll')}</div>` +
     notice('Accepted vote count', 'These figures are calculated from the accepted votes stored in the database.') +
     `<div class="stats"><div class="stat"><small>Accepted votes</small><b>${count.totalVotes}</b></div><div class="stat"><small>Eligible voters</small><b>${count.eligibleVoters}</b></div><div class="stat"><small>Turnout</small><b>${count.turnout.toFixed(0)}%</b></div></div><div class="panel"><h2 class="panel-title">Count summary</h2><div class="table-scroll"><table><thead><tr><th>Candidate</th><th>Accepted votes</th><th>Share</th></tr></thead><tbody>${rows || '<tr><td colspan="3">No approved candidates.</td></tr>'}</tbody></table></div><p class="compact-copy mt">${leader ? `Leading candidate: <b>${escapeHtml(leader)}</b> · ${count.candidates[0].votes} accepted votes${count.tie ? ' · ' + badge('Tied result', 'red') : ''}` : 'No votes have been accepted yet.'}</p><div class="formfoot"><p class="compact-copy">Publication status: <b>${isPublished ? 'Published' : 'Awaiting publication'}</b></p><button type="button" class="btn" data-action="publish">${isPublished ? 'View published results' : 'Publish results preview →'}</button></div></div>`
   );
+}
+
+function voterRollPage() {
+  const data = state.adminVoterRoll;
+  if (!data) return heading('Voter roll', 'Voter roll information is unavailable.');
+  const election = data.election;
+  const summary = data.summary;
+  const tabs = `<div class="tabs">${link('manage?election=' + election.slug, 'Overview')}${link('admin-nominations?election=' + election.slug, 'Nominations')}${link('counting?election=' + election.slug, 'Counting & results')}${link('voter-roll?election=' + election.slug, 'Voter roll', 'selected')}</div>`;
+  const rows = data.voters
+    .map((voter) => {
+      const stateBadge = voter.revokedAt
+        ? badge('Revoked', 'red')
+        : voter.round1UsedAt || voter.round2UsedAt
+          ? badge('Used', 'green')
+          : voter.boundUserId
+            ? badge('Linked', 'green')
+            : badge('Unused');
+      const usage = [
+        voter.round1UsedAt ? 'Round 1' : '',
+        voter.round2UsedAt ? 'Round 2' : ''
+      ].filter(Boolean).join(', ') || '—';
+      return `<tr><td><strong>${escapeHtml(voter.fullName)}</strong><br><small>${escapeHtml(voter.externalId)}</small></td><td>${escapeHtml(voter.email)}</td><td>${stateBadge}<br><small>Email: ${escapeHtml(voter.emailStatus)}</small></td><td>${escapeHtml(usage)}</td><td><button class="btn secondary small" type="button" data-action="resend-voter-code" data-id="${voter.id}" ${voter.revokedAt ? 'disabled' : ''}>Resend</button> <button class="btn secondary small" type="button" data-action="revoke-voter-code" data-id="${voter.id}" ${voter.revokedAt ? 'disabled' : ''}>Revoke</button></td></tr>`;
+    })
+    .join('');
+  return (
+    heading('Voter roll', election.title + ' · ' + (election.voterMode === 'roll' ? 'One-time code required' : 'Open voting')) +
+    tabs +
+    `<div class="stats"><div class="stat"><small>On the roll</small><b>${summary.active}</b><span>${summary.revoked} revoked</span></div><div class="stat"><small>Linked accounts</small><b>${summary.bound}</b><span>${summary.round1Used} used in round 1</span></div><div class="stat"><small>Emails</small><b>${summary.sent}</b><span>${summary.failed} failed · ${summary.pending} pending</span></div></div>` +
+    `<div class="panel"><div class="section-head"><h2>Import voter roll</h2>${badge('CSV', 'green')}</div><p class="compact-copy">Upload a CSV with the columns <b>external_id, full_name, email</b>. Importing switches this election to one-time-code mode. Codes are emailed automatically and are never shown here.</p><div class="formgrid"><div class="field full"><label for="voterRollFile">CSV file</label><input id="voterRollFile" type="file" accept=".csv,text/csv"></div></div><div class="actions"><button class="btn" type="button" data-action="import-voter-roll">Import and send codes</button>${summary.total ? '<button class="btn secondary" type="button" data-action="clear-voter-roll">Clear voter roll</button>' : ''}</div></div>` +
+    `<div class="panel"><div class="section-head"><h2>Voters</h2>${badge(summary.total + ' entries')}</div><div class="table-scroll"><table><thead><tr><th>Voter</th><th>Email</th><th>Status</th><th>Used in</th><th>Actions</th></tr></thead><tbody>${rows || '<tr><td colspan="5">No voters have been imported.</td></tr>'}</tbody></table></div></div>`
+  );
+}
+
+function parseVoterCsv(text) {
+  const rows = [];
+  let row = [];
+  let value = '';
+  let quoted = false;
+  const source = String(text || '').replace(/^\uFEFF/, '');
+  for (let index = 0; index < source.length; index += 1) {
+    const character = source[index];
+    if (quoted) {
+      if (character === '"' && source[index + 1] === '"') {
+        value += '"';
+        index += 1;
+      } else if (character === '"') {
+        quoted = false;
+      } else {
+        value += character;
+      }
+      continue;
+    }
+    if (character === '"') {
+      quoted = true;
+    } else if (character === ',') {
+      row.push(value);
+      value = '';
+    } else if (character === '\n' || character === '\r') {
+      if (character === '\r' && source[index + 1] === '\n') index += 1;
+      row.push(value);
+      value = '';
+      if (row.some((cell) => String(cell).trim())) rows.push(row);
+      row = [];
+    } else {
+      value += character;
+    }
+  }
+  row.push(value);
+  if (row.some((cell) => String(cell).trim())) rows.push(row);
+  if (!rows.length) return [];
+  const normalize = (cell) => String(cell || '').trim().toLowerCase().replace(/[\s-]+/g, '_');
+  const headers = rows[0].map(normalize);
+  const externalIndex = headers.findIndex((header) => ['external_id', 'externalid', 'id'].includes(header));
+  const nameIndex = headers.findIndex((header) => ['full_name', 'fullname', 'name'].includes(header));
+  const emailIndex = headers.findIndex((header) => header === 'email');
+  const hasHeader = externalIndex !== -1 && nameIndex !== -1 && emailIndex !== -1;
+  const dataRows = hasHeader ? rows.slice(1) : rows;
+  const indexes = hasHeader
+    ? { externalIndex, nameIndex, emailIndex }
+    : { externalIndex: 0, nameIndex: 1, emailIndex: 2 };
+  return dataRows
+    .map((cells) => ({
+      externalId: String(cells[indexes.externalIndex] || '').trim(),
+      fullName: String(cells[indexes.nameIndex] || '').trim(),
+      email: String(cells[indexes.emailIndex] || '').trim()
+    }))
+    .filter((voter) => voter.externalId || voter.fullName || voter.email);
 }
 
 function upcoming() {
@@ -1246,7 +1497,7 @@ function upcomingDetail(id) {
     election.roundMode === 'two'
       ? notice(
           'Two voting rounds',
-          'More than four candidates take part in the first round. The top four proceed to the second round.'
+          'More than eight candidates take part in the first round. The top eight proceed to the second round.'
         ) +
         '<div class="actions">' +
         btn('vote?round=1', 'View first-round layout', true) +
@@ -1290,7 +1541,9 @@ function candidateEntry() {
     '" novalidate><h2 class="panel-title">Candidate details</h2><div class="formgrid">' +
     select('Candidate to edit', 'editCandidate', list.map((item) => item.name), c.name) +
     field('Candidate name', 'adminCandidateName', 'text', c.name) +
-    area('Introduction', 'adminIntroduction', c.bio) +
+    field('Member ID', 'adminMemberId', 'text', c.memberId || '') +
+    area('Introduction / design philosophy', 'adminIntroduction', c.bio) +
+    area('Portfolio', 'adminPortfolio', c.portfolio || '') +
     area('Election statement', 'adminStatement', c.manifesto.join('\n')) +
     field('Slogan', 'adminSlogan', 'text', c.tag, true) +
     '<div class="field full"><label for="adminPicture">Profile picture or logo</label><input id="adminPicture" type="file" accept="image/png,image/jpeg,image/webp"></div></div><div class="formfoot"><button class="btn">Save candidate description</button> ' +
@@ -1324,7 +1577,11 @@ async function loadVoteRoute(context, q) {
   let round = roundNumber(context);
   let data = await api(`/api/elections/${slug}/candidates?round=${round}`);
   if (requestedSlug && data.election.roundMode === 'two' && !q.get('round')) {
-    const stageRound = data.election.stage === 'Second round' ? 2 : 1;
+    const listed = findElection(slug);
+    const stageRound = activeRoundForElection({
+      ...data.election,
+      results: listed?.results || data.election.results
+    });
     if (stageRound !== round) {
       round = stageRound;
       data = await api(`/api/elections/${slug}/candidates?round=${round}`);
@@ -1408,9 +1665,10 @@ async function loadRouteData(route, q) {
       nomination = candidate
         ? {
             candidateName: candidate.name,
-            candidateMember: state.user?.studentId || '',
+            candidateMember: candidate.memberId || '',
             introduction: candidate.bio,
             manifesto: candidate.manifesto.join('\n'),
+            portfolio: candidate.portfolio || '',
             campaign: candidate.tag,
             showInstagram: Boolean(contacts.instagram?.show),
             instagramContact: contacts.instagram?.value || '',
@@ -1439,8 +1697,13 @@ async function loadRouteData(route, q) {
       await loadVoteRoute(context, q);
       if (route === 'confirm') {
         const selection = restoreSelection();
-        if (!selection || selection.electionSlug !== state.voteElection.slug || selection.round !== state.voteRound) {
-          notify('Choose a candidate before confirming your vote.');
+        if (
+          !selection ||
+          selection.electionSlug !== state.voteElection.slug ||
+          selection.round !== state.voteRound ||
+          (state.voteElection.voterMode === 'roll' && !selection.voterCode)
+        ) {
+          notify('Choose a candidate and enter your voting code before confirming.');
           location.hash = voteLink('ballot', context);
           return;
         }
@@ -1484,6 +1747,13 @@ async function loadRouteData(route, q) {
       state.adminOverview = await api('/api/admin/overview');
       break;
     }
+    case 'voter-roll': {
+      const slug = q.get('election') || state.adminElection?.slug || 'student-council';
+      const data = await api('/api/admin/elections/' + slug + '/voter-roll');
+      state.adminVoterRoll = data;
+      state.adminElection = data.election;
+      break;
+    }
     case 'setup': {
       const edit = q.get('edit');
       if (edit) {
@@ -1498,10 +1768,22 @@ async function loadRouteData(route, q) {
     }
     case 'manage':
     case 'admin-nominations':
+    case 'admin-review':
     case 'counting':
     case 'candidate-entry': {
       const slug = q.get('election') || 'student-council';
-      if (route === 'counting') {
+      if (route === 'admin-nominations' && !q.get('election')) {
+        const overview = await api('/api/admin/overview');
+        state.adminOverview = overview;
+        state.adminElection = null;
+        state.adminCandidates = overview.pendingNominations || [];
+        state.adminCount = null;
+      } else if (route === 'admin-review') {
+        const data = await api('/api/admin/candidates/' + (q.get('id') || ''));
+        state.adminReview = data;
+        state.adminElection = data.election;
+        state.adminCandidates = [data.candidate];
+      } else if (route === 'counting') {
         const data = await api('/api/admin/elections/' + slug + '/count');
         state.adminCount = data;
         state.adminElection = data.election;
@@ -1524,7 +1806,7 @@ async function loadRouteData(route, q) {
 
 function paint(route, q) {
   signedIn = Boolean(state.user);
-  accountRole = state.user?.role === 'admin' ? 'Administrator' : 'Student';
+  accountRole = state.user?.role === 'admin' ? 'Administrator' : 'Voter';
   stage = state.adminElection?.stage || currentElection()?.stage || 'Voting open';
   published = state.adminElection?.published || state.elections.some((election) => election.published);
   deriveLists();
@@ -1561,6 +1843,9 @@ function paint(route, q) {
       break;
     case 'register-success':
       html = success('register');
+      break;
+    case 'verify-email':
+      html = verifyEmailPage();
       break;
     case 'dashboard':
       html = dashboard();
@@ -1613,8 +1898,14 @@ function paint(route, q) {
     case 'admin-nominations':
       html = review();
       break;
+    case 'admin-review':
+      html = adminReview();
+      break;
     case 'counting':
       html = counting();
+      break;
+    case 'voter-roll':
+      html = voterRollPage();
       break;
     default:
       html = state.user ? dashboard() : login();
@@ -1638,7 +1929,7 @@ const protectedRoutes = [
   'vote-success',
   'status'
 ];
-const adminRoutes = ['admin', 'setup', 'manage', 'admin-nominations', 'counting', 'candidate-entry'];
+const adminRoutes = ['admin', 'setup', 'manage', 'admin-nominations', 'admin-review', 'counting', 'candidate-entry', 'voter-roll'];
 
 async function render() {
   const token = ++renderToken;
@@ -1715,13 +2006,28 @@ async function handleSubmit(event) {
           password: data.newpassword,
           confirm_password: data.repeatpassword,
           full_name: data.fullname,
-          student_id: data.hkid,
           email: data.email
         }
       });
       state.registeredUsername = data.newusername;
-      location.hash = 'register-success';
-      notify('Account created. You can now log in.');
+      state.pendingEmail = String(data.email || '').toLowerCase();
+      location.hash = 'verify-email';
+      notify('Account created. Enter the verification code sent to your email.');
+      return;
+    }
+    if (type === 'verify-email') {
+      const result = await api('/api/auth/verify-email', {
+        method: 'POST',
+        body: { email: data.email, code: data.code }
+      });
+      state.user = result.user;
+      notify(result.message);
+      location.hash = result.user.role === 'admin' ? 'admin' : 'dashboard';
+      if (location.hash === '#admin' || location.hash === '#dashboard') {
+        if (currentRoute().route === (result.user.role === 'admin' ? 'admin' : 'dashboard')) {
+          render();
+        }
+      }
       return;
     }
     if (type === 'vote') {
@@ -1730,10 +2036,16 @@ async function handleSubmit(event) {
         notify('Choose a candidate before continuing.');
         return;
       }
+      const voterCode = String(data.voterCode || '').trim();
+      if (state.voteElection?.voterMode === 'roll' && !voterCode) {
+        notify('Enter the one-time voting code sent to your email.');
+        return;
+      }
       const selection = {
         electionSlug: form.dataset.election,
         round: Number(form.dataset.round),
-        candidateId
+        candidateId,
+        voterCode
       };
       saveSelection(selection);
       location.hash = voteLink('confirm', state.voteContext);
@@ -1745,13 +2057,14 @@ async function handleSubmit(event) {
         candidateMember: data.candidateMember,
         introduction: data.introduction,
         manifesto: data.manifesto,
+        portfolio: data.portfolio,
         campaign: data.campaign,
         declaration: data.declaration === 'on',
         showInstagram: data.showInstagram === 'on',
         instagramContact: data.instagramContact,
         showFacebook: data.showFacebook === 'on',
         facebookContact: data.facebookContact,
-        picture: state.nominationPicture || undefined
+        picture: data.pictureUrl || state.nominationPicture || undefined
       };
       const nominationId = data.nominationId;
       const result = nominationId
@@ -1779,12 +2092,15 @@ async function handleSubmit(event) {
         nomClose: data.nomClose,
         voteOpen: data.voteOpen,
         voteClose: data.voteClose,
+        round2Open: data.round2Open,
+        round2Close: data.round2Close,
         publishAt: data.publishAt,
         voterGroup: data.voterGroup,
+        voterMode: data.voterMode,
         entryMode: data.entryMode,
-        candidateCount: data.candidateCount,
         votingRules: data.votingRules
       };
+      if (data.stage) payload.stage = data.stage;
       const slug = form.dataset.slug;
       const result = slug
         ? await api('/api/admin/elections/' + slug, { method: 'PUT', body: payload })
@@ -1809,7 +2125,9 @@ async function handleSubmit(event) {
     if (type === 'admin-candidate') {
       const payload = {
         name: data.adminCandidateName,
+        memberId: data.adminMemberId,
         bio: data.adminIntroduction,
+        portfolio: data.adminPortfolio,
         manifesto: data.adminStatement,
         tag: data.adminSlogan,
         picture: state.adminPicture
@@ -1823,6 +2141,15 @@ async function handleSubmit(event) {
       render();
     }
   } catch (error) {
+    if (
+      (error.code === 'EMAIL_NOT_VERIFIED' || error.code === 'EMAIL_DELIVERY_FAILED') &&
+      error.data?.email
+    ) {
+      state.pendingEmail = error.data.email;
+      notify(error.message);
+      location.hash = 'verify-email';
+      return;
+    }
     notify(error.message);
   } finally {
     if (button) button.disabled = false;
@@ -1844,12 +2171,107 @@ async function handleClick(event) {
       notify('You have been logged out.');
       return;
     }
+    if (action === 'resend-verification') {
+      const form = el.closest('form[data-form="verify-email"]');
+      const email = form?.querySelector('[name="email"]')?.value || state.pendingEmail;
+      if (!email) {
+        notify('Enter your email address first.');
+        return;
+      }
+      el.disabled = true;
+      try {
+        const result = await api('/api/auth/resend-verification', {
+          method: 'POST',
+          body: { email }
+        });
+        notify(result.message);
+      } finally {
+        el.disabled = false;
+      }
+      return;
+    }
     if (action === 'admin-demo') {
       const result = await api('/api/auth/demo-admin', { method: 'POST' });
       state.user = result.user;
       notify('Signed in with the administrator demo account.');
       location.hash = 'admin';
       render();
+      return;
+    }
+    if (action === 'import-voter-roll') {
+      const election = state.adminVoterRoll?.election;
+      const input = document.getElementById('voterRollFile');
+      const file = input?.files?.[0];
+      if (!election) return;
+      if (!file) {
+        notify('Choose a CSV file to import.');
+        return;
+      }
+      const voters = parseVoterCsv(await file.text());
+      if (!voters.length) {
+        notify('The CSV file does not contain any voters.');
+        return;
+      }
+      el.disabled = true;
+      try {
+        const result = await api('/api/admin/elections/' + election.slug + '/voter-roll/import', {
+          method: 'POST',
+          body: { voters }
+        });
+        notify(result.message);
+        render();
+      } finally {
+        el.disabled = false;
+      }
+      return;
+    }
+    if (action === 'resend-voter-code') {
+      const election = state.adminVoterRoll?.election;
+      if (!election) return;
+      el.disabled = true;
+      try {
+        const result = await api(
+          '/api/admin/elections/' + election.slug + '/voter-roll/' + el.dataset.id + '/resend',
+          { method: 'POST' }
+        );
+        notify(result.message);
+        render();
+      } finally {
+        el.disabled = false;
+      }
+      return;
+    }
+    if (action === 'revoke-voter-code') {
+      const election = state.adminVoterRoll?.election;
+      if (!election) return;
+      if (!window.confirm('Revoke this voter code? The voter will no longer be able to use it.')) return;
+      el.disabled = true;
+      try {
+        const result = await api(
+          '/api/admin/elections/' + election.slug + '/voter-roll/' + el.dataset.id + '/revoke',
+          { method: 'POST' }
+        );
+        notify(result.message);
+        render();
+      } finally {
+        el.disabled = false;
+      }
+      return;
+    }
+    if (action === 'clear-voter-roll') {
+      const election = state.adminVoterRoll?.election;
+      if (!election) return;
+      if (!window.confirm('Clear the entire voter roll for this election?')) return;
+      el.disabled = true;
+      try {
+        const result = await api('/api/admin/elections/' + election.slug + '/voter-roll', {
+          method: 'DELETE'
+        });
+        notify(result.message);
+        render();
+      } finally {
+        el.disabled = false;
+      }
       return;
     }
     if (action === 'save-nomination') {
@@ -1876,7 +2298,11 @@ async function handleClick(event) {
       try {
         const result = await api('/api/elections/' + selection.electionSlug + '/votes', {
           method: 'POST',
-          body: { candidateId: selection.candidateId, round: selection.round }
+          body: {
+            candidateId: selection.candidateId,
+            round: selection.round,
+            voterCode: selection.voterCode || ''
+          }
         });
         state.lastVote = result.vote;
         clearSelection();
@@ -1886,6 +2312,12 @@ async function handleClick(event) {
         notify(error.message);
         if (error.code === 'ALREADY_VOTED' || error.code === 'VOTING_CLOSED' || error.code === 'NOT_ELIGIBLE') {
           location.hash = 'status';
+        } else if (
+          ['VOTER_CODE_REQUIRED', 'INVALID_VOTER_CODE', 'VOTER_CODE_REVOKED',
+            'VOTER_CODE_BOUND_TO_OTHER_ACCOUNT', 'VOTER_EMAIL_MISMATCH',
+            'VOTER_CODE_ALREADY_USED'].includes(error.code)
+        ) {
+          location.hash = voteLink('ballot', state.voteContext);
         }
       } finally {
         el.disabled = false;
@@ -1894,12 +2326,24 @@ async function handleClick(event) {
     }
     if (action === 'nomination-status') {
       el.disabled = true;
-      const result = await api('/api/admin/candidates/' + el.dataset.id + '/status', {
-        method: 'PATCH',
-        body: { status: el.dataset.status }
-      });
-      notify(result.message);
-      render();
+      const form = el.closest('[data-form="review"]');
+      const body = { status: el.dataset.status };
+      if (form) {
+        body.note = form.querySelector('[name="reviewNote"]')?.value || '';
+        if (form.dataset.updatedAt) body.expectedUpdatedAt = form.dataset.updatedAt;
+      }
+      try {
+        const result = await api('/api/admin/candidates/' + el.dataset.id + '/status', {
+          method: 'PATCH',
+          body
+        });
+        notify(result.message);
+        render();
+      } catch (error) {
+        notify(error.message);
+      } finally {
+        el.disabled = false;
+      }
       return;
     }
     if (action === 'publish') {
@@ -2038,8 +2482,18 @@ function initialise() {
   try {
     const session = await api('/api/auth/session');
     state.user = session.user;
+    state.demoMode = Boolean(session.demoMode);
+    state.googleEnabled = Boolean(session.googleEnabled);
+    state.emailMode = session.emailMode || 'console';
   } catch (_) {
     state.user = null;
+  }
+  const params = new URLSearchParams(location.search);
+  if (params.get('google_error')) {
+    notify(params.get('google_error'));
+    params.delete('google_error');
+    const query = params.toString();
+    history.replaceState(null, '', location.pathname + (query ? '?' + query : '') + location.hash);
   }
   await render();
 })();

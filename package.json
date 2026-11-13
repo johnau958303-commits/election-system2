@@ -9,12 +9,14 @@
     "dev": "node --no-warnings --watch server.js",
     "seed": "node --no-warnings server/seed.js",
     "reset": "node --no-warnings server/seed.js --reset",
-    "test": "node --no-warnings --test test/api.test.js"
+    "test": "node --no-warnings --test",
+    "test:coverage": "node --no-warnings --test --experimental-test-coverage"
   },
   "engines": {
     "node": ">=22.5"
   },
   "dependencies": {
-    "express": "^5.3.0"
+    "express": "^5.3.0",
+    "google-auth-library": "^11.3.3"
   }
 }

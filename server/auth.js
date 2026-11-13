@@ -5,7 +5,10 @@ const { getDb, now } = require('./db');
 
 const COOKIE_NAME = 'emvs_sid';
 const SESSION_MS = 7 * 24 * 60 * 60 * 1000;
-const DEMO_MODE = process.env.DEMO_MODE !== 'false';
+const EMAIL_CODE_TTL_MS = 15 * 60 * 1000;
+const EMAIL_CODE_MAX_ATTEMPTS = 5;
+const EMAIL_CODE_COOLDOWN_MS = 60 * 1000;
+const DEMO_MODE = process.env.DEMO_MODE === 'true';
 
 const loginAttempts = new Map();
 
@@ -28,7 +31,12 @@ function parseCookies(header) {
     if (index === -1) continue;
     const key = part.slice(0, index).trim();
     if (!key) continue;
-    cookies[key] = decodeURIComponent(part.slice(index + 1).trim());
+    const raw = part.slice(index + 1).trim();
+    try {
+      cookies[key] = decodeURIComponent(raw);
+    } catch (_) {
+      cookies[key] = raw;
+    }
   }
   return cookies;
 }
@@ -39,11 +47,20 @@ function publicUser(row) {
     id: row.id,
     username: row.username,
     fullName: row.full_name,
-    studentId: row.student_id,
     email: row.email,
+    emailVerified: Boolean(row.email_verified),
+    authProvider: row.auth_provider || 'local',
+    googleLinked: Boolean(row.google_sub),
     role: row.role,
     isEligible: Boolean(row.is_eligible)
   };
+}
+
+function hashEmailCode(code, userId) {
+  return crypto
+    .createHash('sha256')
+    .update(`${userId}:${String(code || '').trim()}`)
+    .digest('hex');
 }
 
 function findUserBySession(sessionId) {
@@ -121,11 +138,9 @@ function originCheck(req, res, next) {
   const origin = req.get('origin');
   if (!origin) return next();
   try {
-    const host = new URL(origin).host;
-    const forwardedHost = String(req.get('x-forwarded-host') || '')
-      .split(',')[0]
-      .trim();
-    if (host !== req.get('host') && host !== forwardedHost) {
+    const originHost = new URL(origin).host.toLowerCase();
+    const requestHost = String(req.get('host') || '').toLowerCase();
+    if (!requestHost || originHost !== requestHost) {
       return res.status(403).json({ error: 'Request origin was rejected.', code: 'BAD_ORIGIN' });
     }
   } catch (_) {
@@ -134,8 +149,22 @@ function originCheck(req, res, next) {
   next();
 }
 
+function pruneAttempts(attempts, limit = 5000) {
+  if (attempts.size <= limit) return;
+  const nowMs = Date.now();
+  for (const [key, entry] of attempts) {
+    if (entry.resetAt < nowMs) attempts.delete(key);
+  }
+  while (attempts.size > limit) {
+    const oldest = attempts.keys().next();
+    if (oldest.done) break;
+    attempts.delete(oldest.value);
+  }
+}
+
 function throttleLogin(key) {
   const nowMs = Date.now();
+  pruneAttempts(loginAttempts);
   const entry = loginAttempts.get(key);
   if (!entry || entry.resetAt < nowMs) {
     loginAttempts.set(key, { count: 1, resetAt: nowMs + 10 * 60 * 1000 });
@@ -164,11 +193,25 @@ function validateUsername(username) {
   return null;
 }
 
+function validateEmail(email) {
+  const value = String(email || '').trim();
+  if (!value) return 'Please enter your email address.';
+  if (value.length > 120) return 'Email address is too long.';
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value)) {
+    return 'Please enter a valid email address.';
+  }
+  return null;
+}
+
 module.exports = {
   COOKIE_NAME,
   DEMO_MODE,
+  EMAIL_CODE_TTL_MS,
+  EMAIL_CODE_MAX_ATTEMPTS,
+  EMAIL_CODE_COOLDOWN_MS,
   hashPassword,
   verifyPassword,
+  hashEmailCode,
   parseCookies,
   publicUser,
   findUserBySession,
@@ -182,5 +225,6 @@ module.exports = {
   throttleLogin,
   resetLoginThrottle,
   validatePassword,
-  validateUsername
+  validateUsername,
+  validateEmail
 };

@@ -8,10 +8,43 @@ const {
   getElectionById,
   serializeElection,
   serializeCandidate,
-  parseManifesto
+  syncRoundMode,
+  recordAudit,
+  parseManifesto,
+  validatePicture
 } = require('../helpers');
 
 const router = express.Router();
+
+const submissionAttempts = new Map();
+const RATE_LIMIT_WINDOW_MS = 10 * 60 * 1000;
+const RATE_LIMIT_MAX = 30;
+
+function pruneAttempts(limit = 5000) {
+  if (submissionAttempts.size <= limit) return;
+  const nowMs = Date.now();
+  for (const [key, entry] of submissionAttempts) {
+    if (entry.resetAt < nowMs) submissionAttempts.delete(key);
+  }
+  while (submissionAttempts.size > limit) {
+    const oldest = submissionAttempts.keys().next();
+    if (oldest.done) break;
+    submissionAttempts.delete(oldest.value);
+  }
+}
+
+function allowSubmission(key) {
+  if (process.env.DISABLE_RATE_LIMIT === 'true' || process.env.NODE_ENV === 'test') return true;
+  const nowMs = Date.now();
+  pruneAttempts();
+  const entry = submissionAttempts.get(key);
+  if (!entry || entry.resetAt < nowMs) {
+    submissionAttempts.set(key, { count: 1, resetAt: nowMs + RATE_LIMIT_WINDOW_MS });
+    return true;
+  }
+  entry.count += 1;
+  return entry.count <= RATE_LIMIT_MAX;
+}
 
 function clean(value, max = 2000) {
   return String(value ?? '').trim().slice(0, max);
@@ -25,19 +58,6 @@ function initialsFor(name) {
     .map((part) => part[0])
     .join('')
     .toUpperCase();
-}
-
-function validatePicture(picture) {
-  if (!picture) return { value: null };
-  const value = String(picture);
-  if (!/^data:image\/(png|jpeg|webp);base64,[A-Za-z0-9+/=]+$/.test(value)) {
-    return { error: 'Choose a PNG, JPEG or WebP image.' };
-  }
-  const base64 = value.slice(value.indexOf(',') + 1);
-  if (base64.length * 0.75 > 2 * 1024 * 1024) {
-    return { error: 'The profile picture must be 2 MB or smaller.' };
-  }
-  return { value };
 }
 
 function contactsFrom(body) {
@@ -60,8 +80,10 @@ function nominationPayload(body) {
   const introduction = clean(body.introduction ?? body.bio, 2000);
   if (!introduction) return { error: 'Enter a personal introduction.' };
   const manifesto = parseManifesto(body.manifesto ?? body.statement);
+  const portfolio = clean(body.portfolio, 2000);
   const campaign = clean(body.campaign ?? body.tag, 160);
-  const studentId = clean(body.candidateMember ?? body.studentId, 30);
+  const studentId = clean(body.candidateMember ?? body.memberId ?? body.studentId, 30);
+  if (!studentId) return { error: 'Enter your membership or student ID.' };
   const declaration =
     body.declaration === true || body.declaration === 'on' || body.declaration === 'true';
   if (!declaration) {
@@ -75,6 +97,7 @@ function nominationPayload(body) {
       initials: initialsFor(name),
       introduction,
       manifesto,
+      portfolio,
       campaign,
       studentId,
       contacts: contactsFrom(body),
@@ -98,6 +121,16 @@ router.post('/elections/:slug/nominations', requireAuth, (req, res) => {
   const db = getDb();
   const election = getElectionBySlug(req.params.slug);
   if (!election) return res.status(404).json({ error: 'Election not found.' });
+  if (req.user.role === 'admin') {
+    return res
+      .status(403)
+      .json({ error: 'Administrator accounts cannot apply as candidates.', code: 'ADMIN_CANNOT_APPLY' });
+  }
+  if (!allowSubmission(`${req.ip}:${req.user.id}`)) {
+    return res
+      .status(429)
+      .json({ error: 'Too many nomination attempts. Please wait a few minutes and try again.' });
+  }
   if (election.entry_mode !== 'students') {
     return res
       .status(403)
@@ -118,41 +151,68 @@ router.post('/elections/:slug/nominations', requireAuth, (req, res) => {
     return res.status(409).json({
       error: 'You have already submitted a nomination for this election. Edit your existing nomination instead.',
       code: 'ALREADY_NOMINATED',
-      candidate: serializeCandidate(existing)
+      candidate: serializeCandidate(existing, { includeReview: true })
     });
   }
 
   const payload = nominationPayload(req.body || {});
   if (payload.error) return res.status(400).json({ error: payload.error });
   const data = payload.data;
-
-  const info = db
+  const memberTaken = db
     .prepare(
-      `INSERT INTO candidates
-        (election_id, user_id, name, initials, tag, bio, manifesto, picture, contacts,
-         status, advanced, submitted_at, updated_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)`
+      'SELECT id FROM candidates WHERE election_id = ? AND member_id = ? AND (user_id IS NULL OR user_id != ?)'
     )
-    .run(
-      election.id,
-      req.user.id,
-      data.name,
-      data.initials,
-      data.campaign,
-      data.introduction,
-      JSON.stringify(data.manifesto),
-      data.picture,
-      JSON.stringify(data.contacts),
-      nowIso(),
-      nowIso()
-    );
+    .get(election.id, data.studentId, req.user.id);
+  if (memberTaken) {
+    return res
+      .status(409)
+      .json({ error: 'That membership or student ID is already used in this election.', code: 'MEMBER_ID_TAKEN' });
+  }
 
-  const row = db.prepare('SELECT * FROM candidates WHERE id = ?').get(Number(info.lastInsertRowid));
-  res.status(201).json({
-    candidate: serializeCandidate(row),
-    election: serializeElection(election),
-    message: 'Nomination submitted for review.'
-  });
+  try {
+    const info = db
+      .prepare(
+        `INSERT INTO candidates
+          (election_id, user_id, name, initials, tag, bio, manifesto, portfolio, picture, contacts,
+           member_id, status, advanced, submitted_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', 0, ?, ?)`
+      )
+      .run(
+        election.id,
+        req.user.id,
+        data.name,
+        data.initials,
+        data.campaign,
+        data.introduction,
+        JSON.stringify(data.manifesto),
+        data.portfolio,
+        data.picture,
+        JSON.stringify(data.contacts),
+        data.studentId,
+        nowIso(),
+        nowIso()
+      );
+
+    const row = db.prepare('SELECT * FROM candidates WHERE id = ?').get(Number(info.lastInsertRowid));
+    recordAudit(req.user.id, 'nomination.submitted', {
+      electionId: election.id,
+      candidateId: row.id
+    });
+    syncRoundMode(election.id);
+    res.status(201).json({
+      candidate: serializeCandidate(row, { includeReview: true }),
+      election: serializeElection(getElectionById(election.id)),
+      message: 'Nomination submitted for review.'
+    });
+  } catch (error) {
+    if (String(error.message).includes('UNIQUE')) {
+      return res.status(409).json({
+        error: 'You have already submitted a nomination for this election. Edit your existing nomination instead.',
+        code: 'ALREADY_NOMINATED'
+      });
+    }
+    throw error;
+  }
 });
 
 router.put('/nominations/:id', requireAuth, (req, res) => {
@@ -162,8 +222,19 @@ router.put('/nominations/:id', requireAuth, (req, res) => {
   if (candidate.user_id !== req.user.id) {
     return res.status(403).json({ error: 'You can only edit your own nomination.' });
   }
-  if (candidate.status === 'rejected') {
-    return res.status(403).json({ error: 'This nomination has been reviewed and cannot be edited.' });
+  if (req.user.role === 'admin') {
+    return res
+      .status(403)
+      .json({ error: 'Administrator accounts cannot edit candidate applications.', code: 'ADMIN_CANNOT_APPLY' });
+  }
+  if (candidate.status !== 'pending') {
+    return res.status(403).json({
+      error:
+        candidate.status === 'approved'
+          ? 'Your nomination has been approved and can no longer be edited. Ask the administrator to return it for changes.'
+          : 'This nomination has been rejected and can no longer be edited.',
+      code: 'NOMINATION_LOCKED'
+    });
   }
   const election = getElectionById(candidate.election_id);
   if (!election) return res.status(404).json({ error: 'Election not found.' });
@@ -177,32 +248,61 @@ router.put('/nominations/:id', requireAuth, (req, res) => {
   if (election.stage === 'Results published') {
     return res.status(403).json({ error: 'This election has finished.' });
   }
+  if (!allowSubmission(`${req.ip}:${req.user.id}`)) {
+    return res
+      .status(429)
+      .json({ error: 'Too many nomination attempts. Please wait a few minutes and try again.' });
+  }
 
   const payload = nominationPayload(req.body || {});
   if (payload.error) return res.status(400).json({ error: payload.error });
   const data = payload.data;
+  const memberTaken = db
+    .prepare(
+      'SELECT id FROM candidates WHERE election_id = ? AND member_id = ? AND id != ?'
+    )
+    .get(election.id, data.studentId, candidate.id);
+  if (memberTaken) {
+    return res
+      .status(409)
+      .json({ error: 'That membership or student ID is already used in this election.', code: 'MEMBER_ID_TAKEN' });
+  }
 
   db.prepare(
     `UPDATE candidates
-        SET name = ?, initials = ?, tag = ?, bio = ?, manifesto = ?, picture = ?,
-            contacts = ?, status = 'pending', updated_at = ?
-      WHERE id = ?`
+        SET name = ?, initials = ?, tag = ?, bio = ?, manifesto = ?, portfolio = ?, picture = ?,
+            contacts = ?, member_id = ?, status = 'pending', review_note = NULL,
+            reviewed_at = NULL, reviewed_by = NULL, updated_at = ?
+      WHERE id = ? AND status = 'pending'`
   ).run(
     data.name,
     data.initials,
     data.campaign,
     data.introduction,
     JSON.stringify(data.manifesto),
+    data.portfolio,
     data.picture,
     JSON.stringify(data.contacts),
+    data.studentId,
     nowIso(),
     candidate.id
   );
 
   const row = db.prepare('SELECT * FROM candidates WHERE id = ?').get(candidate.id);
+  if (!row || row.status !== 'pending') {
+    return res.status(409).json({
+      error: 'Your nomination was updated by the administrator. Please reload and try again.',
+      code: 'REVIEW_CONFLICT'
+    });
+  }
+  recordAudit(req.user.id, 'nomination.updated', {
+    electionId: election.id,
+    candidateId: row.id
+  });
+  syncRoundMode(election.id);
   res.json({
-    candidate: serializeCandidate(row),
-    election: serializeElection(election),
+    candidate: serializeCandidate(row, { includeReview: true }),
+    election: serializeElection(getElectionById(election.id)),
     message: 'Nomination updated and sent for review.'
   });
 });

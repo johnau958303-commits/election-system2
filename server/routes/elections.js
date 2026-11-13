@@ -10,7 +10,8 @@ const {
   resultSummary,
   getElectionBySlug,
   getElectionById,
-  electionStatus
+  electionStatus,
+  currentRoundForElection
 } = require('../helpers');
 
 const router = express.Router();
@@ -35,7 +36,7 @@ router.get('/elections/:slug', (req, res) => {
   const row = getElectionBySlug(req.params.slug);
   if (!row) return res.status(404).json({ error: 'Election not found.', code: 'NOT_FOUND' });
   const election = withResult(row);
-  const round = row.round_mode === 'two' && row.stage === 'Second round' ? 2 : 1;
+  const round = currentRoundForElection(row);
   res.json({
     election,
     round,
@@ -147,11 +148,11 @@ router.get('/nominations/mine', requireAuth, (req, res) => {
 
   const deadline = electionRow.nomination_close ? new Date(electionRow.nomination_close) : null;
   const canEdit =
-    row.status !== 'rejected' &&
+    row.status === 'pending' &&
     electionRow.stage !== 'Results published' &&
     (!deadline || now() <= deadline);
   res.json({
-    candidate: serializeCandidate(row),
+    candidate: serializeCandidate(row, { includeReview: true }),
     election: serializeElection(electionRow),
     canEdit
   });
@@ -164,29 +165,42 @@ router.get('/status', requireAuth, (req, res) => {
     return res.status(404).json({ error: 'Election not found.' });
   }
   const election = serializeElection(electionRow);
+  const currentRound = currentRoundForElection(electionRow);
   const vote = db
     .prepare(
       `SELECT v.*, c.name, c.initials FROM votes v
          JOIN candidates c ON c.id = v.candidate_id
-        WHERE v.election_id = ? AND v.voter_id = ?
+        WHERE v.election_id = ? AND v.voter_id = ? AND v.round = ?
         ORDER BY v.id DESC LIMIT 1`
     )
-    .get(electionRow.id, req.user.id);
+    .get(electionRow.id, req.user.id, currentRound);
   const status = electionStatus(electionRow);
-  const reason = !req.user.isEligible
-    ? 'NOT_ELIGIBLE'
-    : vote
-      ? 'ALREADY_VOTED'
-      : status === 'closed' || status === 'published'
-        ? 'VOTING_CLOSED'
-        : status === 'upcoming' || status === 'nominations_open' || status === 'candidate_review' || status === 'draft'
-          ? 'VOTING_NOT_OPEN'
-          : 'ELIGIBLE';
+  const rollEntry =
+    electionRow.voter_mode === 'roll'
+      ? db
+          .prepare(
+            `SELECT id FROM voter_roll
+              WHERE election_id = ? AND lower(email) = lower(?) AND revoked_at IS NULL`
+          )
+          .get(electionRow.id, req.user.email || '')
+      : null;
+  const onRoll = electionRow.voter_mode !== 'roll' || Boolean(rollEntry);
+  const reason =
+    !req.user.isEligible || !onRoll
+      ? 'NOT_ELIGIBLE'
+      : vote
+        ? 'ALREADY_VOTED'
+        : status === 'closed' || status === 'published'
+          ? 'VOTING_CLOSED'
+          : status === 'upcoming' || status === 'nominations_open' || status === 'candidate_review' || status === 'draft'
+            ? 'VOTING_NOT_OPEN'
+            : 'ELIGIBLE';
   res.json({
     user: req.user,
     election,
     status,
     reason,
+    requiresVoterCode: electionRow.voter_mode === 'roll',
     myVote: vote
       ? {
           reference: `VOTE-${String(vote.id).padStart(6, '0')}`,

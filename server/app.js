@@ -8,11 +8,14 @@ const { attachUser, originCheck } = require('./auth');
 
 function createApp() {
   initDb();
-  seedIfEmpty(getDb());
+  if (process.env.NODE_ENV !== 'production' && process.env.AUTO_SEED !== 'false') {
+    seedIfEmpty(getDb());
+  }
 
   const app = express();
   const root = path.join(__dirname, '..');
 
+  app.set('trust proxy', 1);
   app.disable('x-powered-by');
   app.use((req, res, next) => {
     res.set('X-Content-Type-Options', 'nosniff');

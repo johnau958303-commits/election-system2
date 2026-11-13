@@ -8,8 +8,7 @@ const app = createApp();
 
 app.listen(port, host, () => {
   console.log(`Election Management & Voting System running at http://localhost:${port}`);
-  console.log('Demo accounts: admin / Admin1234! (administrator)');
-  console.log('               student / Student1234! (eligible student)');
-  console.log('               notonroll / Student1234! (not on the election roll)');
-  console.log('               alex / Student1234! (candidate account)');
+  if (process.env.NODE_ENV !== 'production') {
+    console.log('Demo account: admin / Admin1234! (administrator)');
+  }
 });
