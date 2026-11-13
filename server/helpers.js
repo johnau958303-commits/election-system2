@@ -54,18 +54,24 @@ function validatePicture(picture) {
     }
     return { value };
   }
+  if (/[<>"'\u0000-\u001f\u007f]/.test(value)) {
+    return { error: 'The picture URL contains unsupported characters.' };
+  }
   if (!/^https?:\/\//i.test(value) || value.length > 500) {
     return { error: 'Enter an http(s) image URL or choose a PNG, JPEG or WebP image.' };
   }
   try {
     const url = new URL(value);
-    if (!['http:', 'https:'].includes(url.protocol)) {
+    if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) {
       return { error: 'Enter an http(s) image URL or choose a PNG, JPEG or WebP image.' };
     }
+    if (url.href.length > 500) {
+      return { error: 'Enter an http(s) image URL or choose a PNG, JPEG or WebP image.' };
+    }
+    return { value: url.href };
   } catch (_) {
     return { error: 'Enter an http(s) image URL or choose a PNG, JPEG or WebP image.' };
   }
-  return { value };
 }
 
 function serializeCandidate(row, options = {}) {

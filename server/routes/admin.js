@@ -578,6 +578,41 @@ router.patch('/elections/:slug/stage', (req, res) => {
   });
 });
 
+router.get('/audit', (req, res) => {
+  const db = getDb();
+  const limit = Math.max(1, Math.min(500, Number(req.query.limit) || 100));
+  const slug = String(req.query.election || '').trim();
+  let electionId = null;
+  if (slug) {
+    const election = getElectionBySlug(slug);
+    if (!election) return res.status(404).json({ error: 'Election not found.' });
+    electionId = election.id;
+  }
+  const base = `SELECT a.*, u.username AS actor_username, e.title AS election_title,
+                       c.name AS candidate_name
+                  FROM audit_log a
+                  LEFT JOIN users u ON u.id = a.actor_id
+                  LEFT JOIN elections e ON e.id = a.election_id
+                  LEFT JOIN candidates c ON c.id = a.candidate_id`;
+  const rows = electionId
+    ? db.prepare(`${base} WHERE a.election_id = ? ORDER BY a.id DESC LIMIT ?`).all(electionId, limit)
+    : db.prepare(`${base} ORDER BY a.id DESC LIMIT ?`).all(limit);
+  res.json({
+    entries: rows.map((row) => ({
+      id: row.id,
+      action: row.action,
+      actorId: row.actor_id,
+      actorUsername: row.actor_username,
+      electionId: row.election_id,
+      electionTitle: row.election_title,
+      candidateId: row.candidate_id,
+      candidateName: row.candidate_name,
+      detail: row.detail,
+      createdAt: row.created_at
+    }))
+  });
+});
+
 router.get('/elections/:slug/count', (req, res) => {
   const election = getElectionBySlug(req.params.slug);
   if (!election) return res.status(404).json({ error: 'Election not found.' });
@@ -905,6 +940,19 @@ function freshVoterCode(electionId) {
   throw new Error('Could not generate a unique voting code.');
 }
 
+async function runWithConcurrency(items, limit, worker) {
+  const results = new Array(items.length);
+  let nextIndex = 0;
+  const runners = Array.from({ length: Math.min(limit, items.length) }, async () => {
+    while (nextIndex < items.length) {
+      const index = nextIndex++;
+      results[index] = await worker(items[index], index);
+    }
+  });
+  await Promise.all(runners);
+  return results;
+}
+
 async function deliverVoterCode(election, row, code) {
   const db = getDb();
   const sentAt = nowIso();
@@ -1128,8 +1176,10 @@ router.post('/elections/:slug/voter-roll/import', async (req, res) => {
 
   let sent = 0;
   let failed = 0;
-  for (const item of toSend) {
-    const delivery = await deliverVoterCode(election, item.row, item.code);
+  const deliveries = await runWithConcurrency(toSend, 5, (item) =>
+    deliverVoterCode(election, item.row, item.code)
+  );
+  for (const delivery of deliveries) {
     if (delivery.ok) sent += 1;
     else failed += 1;
   }

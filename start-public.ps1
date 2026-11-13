@@ -6,6 +6,7 @@ $root = Split-Path -Parent $MyInvocation.MyCommand.Path
 Set-Location -LiteralPath $root
 
 $port = if ($env:PORT) { [int]$env:PORT } else { 3000 }
+if (-not $env:TRUST_PROXY) { $env:TRUST_PROXY = '1' }
 $localHealth = "http://127.0.0.1:$port/api/health"
 $toolsDir = Join-Path $env:LOCALAPPDATA 'ElectionSystem'
 $logDir = Join-Path $toolsDir 'logs'

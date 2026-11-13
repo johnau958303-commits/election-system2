@@ -11,6 +11,7 @@ const dbPath = path.join(os.tmpdir(), `emvs-test-${Date.now()}-${Math.random().t
 process.env.DB_PATH = dbPath;
 process.env.DEMO_MODE = 'true';
 process.env.EMAIL_MODE = 'test';
+process.env.NODE_ENV = 'test';
 
 const { createApp } = require('../server/app');
 const { closeDb, getDb } = require('../server/db');
@@ -45,7 +46,7 @@ async function request(urlPath, options = {}) {
   } catch (_) {
     data = text;
   }
-  return { status: response.status, data, cookie: cookiesFrom(response) };
+  return { status: response.status, data, cookie: cookiesFrom(response), headers: response.headers };
 }
 
 function iso(days) {
@@ -1150,6 +1151,62 @@ test('26. voter roll imports support swapping email addresses', async () => {
   );
   assert.equal(emails.S001, 'swaptwo@school.example');
   assert.equal(emails.S002, 'swapone@school.example');
+});
+
+test('27. health endpoint verifies the database and disables caching', async () => {
+  const health = await request('/api/health');
+  assert.equal(health.status, 200, JSON.stringify(health.data));
+  assert.equal(health.data.ok, true);
+  assert.equal(health.data.database, 'ok');
+  assert.match(health.headers.get('cache-control') || '', /no-store/);
+});
+
+test('28. API responses send hardening headers', async () => {
+  const list = await request('/api/elections');
+  assert.equal(list.status, 200);
+  assert.equal(list.headers.get('x-content-type-options'), 'nosniff');
+  assert.equal(list.headers.get('x-frame-options'), 'SAMEORIGIN');
+  assert.match(list.headers.get('content-security-policy') || '', /script-src 'self'/);
+  assert.match(list.headers.get('permissions-policy') || '', /camera=\(\)/);
+  assert.match(list.headers.get('cache-control') || '', /no-store/);
+});
+
+test('29. candidate picture URLs cannot inject markup', async () => {
+  const election = await createElection({ electionTitle: 'Picture Validation Election' });
+  const bad = await request(`/api/admin/elections/${election.slug}/candidates`, {
+    method: 'POST',
+    cookie: adminCookie,
+    body: {
+      name: 'Injected Candidate',
+      picture: 'https://example.com/"><img src=x onerror=alert(1)>'
+    }
+  });
+  assert.equal(bad.status, 400, JSON.stringify(bad.data));
+
+  const good = await request(`/api/admin/elections/${election.slug}/candidates`, {
+    method: 'POST',
+    cookie: adminCookie,
+    body: { name: 'Safe Candidate', picture: 'https://EXAMPLE.com/photo.png' }
+  });
+  assert.equal(good.status, 201, JSON.stringify(good.data));
+  assert.equal(good.data.candidate.picture, 'https://example.com/photo.png');
+});
+
+test('30. audit log is admin-only and records election changes', async () => {
+  const election = await createElection({ electionTitle: 'Audit Log Election' });
+  const denied = await request(`/api/admin/audit?election=${election.slug}`, {
+    cookie: studentCookie
+  });
+  assert.equal(denied.status, 403);
+
+  const audit = await request(`/api/admin/audit?election=${election.slug}&limit=10`, {
+    cookie: adminCookie
+  });
+  assert.equal(audit.status, 200, JSON.stringify(audit.data));
+  const created = audit.data.entries.find((entry) => entry.action === 'election.created');
+  assert.ok(created);
+  assert.equal(created.actorUsername, 'admin');
+  assert.equal(created.electionTitle, election.title);
 });
 
 after(async () => {

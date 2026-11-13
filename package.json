@@ -10,10 +10,12 @@
     "seed": "node --no-warnings server/seed.js",
     "reset": "node --no-warnings server/seed.js --reset",
     "test": "node --no-warnings --test",
-    "test:coverage": "node --no-warnings --test --experimental-test-coverage"
+    "test:coverage": "node --no-warnings --test --experimental-test-coverage",
+    "check": "node --no-warnings scripts/check.js",
+    "backup": "node --no-warnings scripts/backup.js"
   },
   "engines": {
-    "node": ">=22.5"
+    "node": ">=22.13.0"
   },
   "dependencies": {
     "express": "^5.3.0",

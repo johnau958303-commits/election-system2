@@ -2,11 +2,14 @@
 
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
+const path = require('node:path');
+const { spawnSync } = require('node:child_process');
 
 const { toIso } = require('../server/db');
 const {
   hashPassword,
   verifyPassword,
+  hashEmailCode,
   validatePassword,
   validateUsername,
   validateEmail
@@ -14,6 +17,7 @@ const {
 const {
   parseManifesto,
   parseContacts,
+  validatePicture,
   serializeCandidate,
   electionStatus
 } = require('../server/helpers');
@@ -22,6 +26,22 @@ const {
   generateVoterCode,
   hashVoterCode
 } = require('../server/voter-codes');
+
+test('production refuses to start with DEMO_MODE enabled', () => {
+  const result = spawnSync(process.execPath, ['-e', "require('./server/app').createApp()"], {
+    cwd: path.join(__dirname, '..'),
+    env: {
+      ...process.env,
+      NODE_ENV: 'production',
+      DEMO_MODE: 'true',
+      VOTER_CODE_SECRET: 'test-only-secret',
+      DB_PATH: path.join(__dirname, 'guard-test.db')
+    },
+    encoding: 'utf8'
+  });
+  assert.notEqual(result.status, 0);
+  assert.match(`${result.stdout}${result.stderr}`, /DEMO_MODE/);
+});
 
 test('parseManifesto normalizes arrays and newline text', () => {
   assert.deepEqual(parseManifesto('One\nTwo\r\n\r\nThree'), ['One', 'Two', 'Three']);
@@ -36,6 +56,24 @@ test('parseContacts accepts objects and valid JSON only', () => {
   assert.deepEqual(parseContacts('{"email":"a@example.com"}'), { email: 'a@example.com' });
   assert.deepEqual(parseContacts('not-json'), {});
   assert.deepEqual(parseContacts(null), {});
+});
+
+test('validatePicture accepts safe images and rejects attribute injection', () => {
+  const safe = validatePicture('https://example.com/photo.png');
+  assert.equal(safe.value, 'https://example.com/photo.png');
+  assert.equal(validatePicture('data:image/png;base64,AAAA').value, 'data:image/png;base64,AAAA');
+  assert.ok(validatePicture('javascript:alert(1)').error);
+  assert.ok(validatePicture('https://example.com/"><img src=x onerror=alert(1)>').error);
+  assert.ok(validatePicture('https://user:pass@example.com/photo.png').error);
+  assert.ok(validatePicture('data:image/png;base64,' + 'A'.repeat(3 * 1024 * 1024)).error);
+});
+
+test('verification code hashes are bound to the user and server secret', () => {
+  const first = hashEmailCode('123456', 1);
+  assert.equal(first, hashEmailCode('123456', 1));
+  assert.notEqual(first, hashEmailCode('123456', 2));
+  assert.notEqual(first, hashEmailCode('654321', 1));
+  assert.match(first, /^[a-f0-9]{64}$/);
 });
 
 test('serializeCandidate maps database columns to API fields', () => {

@@ -19,6 +19,7 @@ const {
   requireAuth,
   throttleLogin,
   resetLoginThrottle,
+  throttleAction,
   validatePassword,
   validateUsername,
   validateEmail
@@ -42,6 +43,13 @@ function clean(value, max = 200) {
 
 function normalizeEmail(value) {
   return clean(value, 120).toLowerCase();
+}
+
+function tooManyRequests(res) {
+  return res.status(429).json({
+    error: 'Too many requests. Please wait a while and try again.',
+    code: 'RATE_LIMITED'
+  });
 }
 
 function sameHash(left, right) {
@@ -102,6 +110,7 @@ router.get('/session', (req, res) => {
 });
 
 router.post('/register', async (req, res, next) => {
+  if (!throttleAction('register', req.ip, 30, 60 * 60 * 1000)) return tooManyRequests(res);
   const db = getDb();
   const body = req.body || {};
   const username = clean(body.username, 30);
@@ -170,6 +179,7 @@ router.post('/register', async (req, res, next) => {
 });
 
 router.post('/verify-email', (req, res) => {
+  if (!throttleAction('verify-email', req.ip, 30, 15 * 60 * 1000)) return tooManyRequests(res);
   const db = getDb();
   const body = req.body || {};
   const email = normalizeEmail(body.email);
@@ -213,6 +223,9 @@ router.post('/verify-email', (req, res) => {
 });
 
 router.post('/resend-verification', async (req, res, next) => {
+  if (!throttleAction('resend-verification', req.ip, 10, 60 * 60 * 1000)) {
+    return tooManyRequests(res);
+  }
   const db = getDb();
   const email = normalizeEmail((req.body || {}).email);
   if (!email) return res.status(400).json({ error: 'Enter your email address.' });

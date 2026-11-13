@@ -26,7 +26,7 @@ The server is Node.js + Express 5, persistence is SQLite through the built-in `n
 
 ## Requirements
 
-- Node.js 22.5 or newer (tested with Node.js 24)
+- Node.js 22.13 or newer (tested with Node.js 24)
 - npm 10 or newer
 
 ## Quick start
@@ -80,6 +80,8 @@ Google accounts must have a verified email address. An existing local account wi
 | `npm run reset` | Delete and rebuild the database with demo data |
 | `npm test` | Run all unit and API tests |
 | `npm run test:coverage` | Run tests with Node.js code coverage |
+| `npm run check` | Syntax-check every JavaScript file |
+| `npm run backup` | Write a consistent SQLite snapshot with `VACUUM INTO` |
 | `start-public.cmd` | Start the app and a temporary Cloudflare Quick Tunnel |
 | `stop-public.cmd` | Stop the public session and server |
 
@@ -93,13 +95,16 @@ Google accounts must have a verified email address. An existing local account wi
 | `NODE_ENV` | unset | Set to `production` to disable auto-seeding and demo logging |
 | `DEMO_MODE` | `false` | Enables the administrator demo endpoint and button |
 | `AUTO_SEED` | unset | Set to `false` to disable automatic seeding in development |
+| `TRUST_PROXY` | unset | Trusted proxy hops or Express trust value, e.g. `1` behind a tunnel |
 | `ELECTION_NOW` | unset | Overrides the current time for deterministic tests |
 | `PUBLIC_BASE_URL` | unset | Fixed HTTPS origin used for Google OAuth callbacks |
 | `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` | unset | Google OAuth credentials; hides Google login when unset |
 | `GOOGLE_REDIRECT_URI` | derived | Overrides the Google callback URL |
 | `EMAIL_MODE` | `console` | `resend`, `console`, or `test` email delivery |
+| `EMAIL_TIMEOUT_MS` | `10000` | Timeout for the Resend HTTP request |
 | `RESEND_API_KEY` / `MAIL_FROM` | unset | Resend API key and sender for real emails |
-| `VOTER_CODE_SECRET` | dev fallback | Secret used to hash one-time voter codes; set a long random value in production |
+| `VOTER_CODE_SECRET` | dev fallback | Secret used to hash one-time voter codes; required in production |
+| `EMAIL_CODE_SECRET` | falls back | Optional separate secret for email verification code hashes |
 
 ## Voter rolls and one-time codes
 
@@ -137,8 +142,9 @@ Open elections do not require a code. Any verified voter account may vote once p
 |-- test/
 |   |-- api.test.js         API integration tests
 |   `-- unit.test.js        Unit tests for pure helpers
-|-- docs/                   Requirements, models, architecture, design, testing
-|-- .github/workflows/      Continuous integration
+|-- scripts/                Syntax check and database backup utilities
+|-- docs/                   Requirements, models, architecture, design, testing, operations, threat model
+|-- .github/                CI workflow and Dependabot configuration
 |-- data/                   SQLite database (created at runtime)
 `-- start-public.* / stop-public.*  Optional public sharing scripts
 ```
@@ -163,26 +169,26 @@ npm test
 npm run test:coverage
 ```
 
-The suite covers registration and email verification, duplicate email/username handling, session guards, election setup, role enforcement, nomination review, open voting, voter-roll code binding and resends, voting restrictions, duplicate prevention, ties, two-round advancement, multi-seat publishing, invalid stage transitions, SQLite persistence, and the health endpoint.
+The suite covers registration and email verification, duplicate email/username handling, session guards, election setup, role enforcement, nomination review, open voting, voter-roll code binding and resends, voting restrictions, duplicate prevention, ties, two-round advancement, multi-seat publishing, invalid stage transitions, SQLite persistence, security headers, picture URL hardening, audit-log access, the production demo guard, and the health endpoint.
 
 ## Security notes
 
 This project is suitable for coursework and controlled demonstrations. Before using it for a real election:
 
-- Remove the demo administrator and set `NODE_ENV=production`.
-- Do not enable `DEMO_MODE` in production.
-- Serve the app over HTTPS and configure a trusted reverse proxy.
-- Set a long random `VOTER_CODE_SECRET`, `RESEND_API_KEY`, `MAIL_FROM`, and Google OAuth variables.
-- Replace the in-memory login throttle with a shared rate-limiter if running multiple instances.
+- Set `NODE_ENV=production`. The server refuses to start if `DEMO_MODE=true` in production.
+- Set a long random `VOTER_CODE_SECRET` (and optionally `EMAIL_CODE_SECRET`), `RESEND_API_KEY`, `MAIL_FROM`, and Google OAuth variables.
+- Serve the app over HTTPS and set `TRUST_PROXY=1` when it runs behind a trusted reverse proxy or tunnel.
+- The in-memory rate limits (login, registration, verification, nominations) are per process; use a shared limiter if running multiple instances.
+- Security headers (CSP, HSTS in production, frame and MIME protections) and `Cache-Control: no-store` on API responses are set by default.
 - Use voter-roll mode with one-time codes for elections that need an official eligibility list. Open voting marks verified accounts as eligible automatically.
-- Administrator actions and result publication are audit-logged.
-- Protect the database file and schedule encrypted backups.
+- Administrator actions and result publication are audit-logged and visible in the election management page.
+- Run `npm run backup` before maintenance and store snapshots on encrypted, off-host storage.
 - Review the vote-storage model if ballot secrecy from database administrators is required.
 - Add CSRF tokens if the app is embedded in a broader site or if third-party cookies are allowed.
 
 ## Deployment
 
-Google OAuth requires a fixed HTTPS callback URL. Use a named Cloudflare Tunnel or another stable deployment; temporary Quick Tunnel URLs are not suitable for Google Sign-In. Set `PUBLIC_BASE_URL` (or `GOOGLE_REDIRECT_URI`) to the fixed HTTPS origin and register `/api/auth/google/callback` in Google Cloud. Configure Resend for verification and voter-code emails. Set `NODE_ENV=production`, provide a persistent disk for `data/election.db`, and run `npm run seed` once if an empty database is acceptable.
+Google OAuth requires a fixed HTTPS callback URL. Use a named Cloudflare Tunnel or another stable deployment; temporary Quick Tunnel URLs are not suitable for Google Sign-In. Set `PUBLIC_BASE_URL` (or `GOOGLE_REDIRECT_URI`) to the fixed HTTPS origin and register `/api/auth/google/callback` in Google Cloud. Configure Resend for verification and voter-code emails. Set `NODE_ENV=production`, provide a persistent disk for `data/election.db`, and set `TRUST_PROXY=1` if a tunnel or reverse proxy terminates TLS. Use `/api/health` for readiness checks and `npm run backup` for snapshots. Run `npm run seed` once if an empty database is acceptable. See [docs/operations.md](docs/operations.md) for the runbook.
 
 ## Documentation
 
@@ -192,6 +198,8 @@ Google OAuth requires a fixed HTTPS callback URL. Use a named Cloudflare Tunnel 
 - [Design and implementation](docs/design.md)
 - [Test plan](docs/test-plan.md)
 - [Process and agile plan](docs/process-and-agile.md)
+- [Operations runbook](docs/operations.md)
+- [Threat model](docs/threat-model.md)
 
 ## Repository
 

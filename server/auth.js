@@ -9,8 +9,28 @@ const EMAIL_CODE_TTL_MS = 15 * 60 * 1000;
 const EMAIL_CODE_MAX_ATTEMPTS = 5;
 const EMAIL_CODE_COOLDOWN_MS = 60 * 1000;
 const DEMO_MODE = process.env.DEMO_MODE === 'true';
+const EMAIL_CODE_SECRET =
+  process.env.EMAIL_CODE_SECRET ||
+  process.env.VOTER_CODE_SECRET ||
+  process.env.SESSION_SECRET ||
+  'development-email-code-secret';
+
+if (
+  process.env.NODE_ENV === 'production' &&
+  !process.env.EMAIL_CODE_SECRET &&
+  !process.env.VOTER_CODE_SECRET &&
+  !process.env.SESSION_SECRET
+) {
+  throw new Error(
+    'Set EMAIL_CODE_SECRET, VOTER_CODE_SECRET or SESSION_SECRET before running in production.'
+  );
+}
 
 const loginAttempts = new Map();
+const actionAttempts = new Map();
+
+const RATE_LIMIT_DISABLED =
+  process.env.NODE_ENV === 'test' || process.env.DISABLE_RATE_LIMIT === 'true';
 
 function hashPassword(password, salt = crypto.randomBytes(16).toString('hex')) {
   const hash = crypto.scryptSync(String(password), salt, 64).toString('hex');
@@ -58,7 +78,7 @@ function publicUser(row) {
 
 function hashEmailCode(code, userId) {
   return crypto
-    .createHash('sha256')
+    .createHmac('sha256', EMAIL_CODE_SECRET)
     .update(`${userId}:${String(code || '').trim()}`)
     .digest('hex');
 }
@@ -178,6 +198,20 @@ function resetLoginThrottle(key) {
   loginAttempts.delete(key);
 }
 
+function throttleAction(action, key, max, windowMs) {
+  if (RATE_LIMIT_DISABLED) return true;
+  const composite = `${action}:${key}`;
+  const nowMs = Date.now();
+  pruneAttempts(actionAttempts);
+  const entry = actionAttempts.get(composite);
+  if (!entry || entry.resetAt < nowMs) {
+    actionAttempts.set(composite, { count: 1, resetAt: nowMs + windowMs });
+    return true;
+  }
+  entry.count += 1;
+  return entry.count <= max;
+}
+
 function validatePassword(password) {
   const value = String(password || '');
   if (value.length < 8) return 'Password must be at least 8 characters.';
@@ -224,6 +258,7 @@ module.exports = {
   originCheck,
   throttleLogin,
   resetLoginThrottle,
+  throttleAction,
   validatePassword,
   validateUsername,
   validateEmail

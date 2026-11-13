@@ -5,6 +5,7 @@ const crypto = require('node:crypto');
 const EMAIL_MODE = String(process.env.EMAIL_MODE || '').toLowerCase();
 const RESEND_API_KEY = String(process.env.RESEND_API_KEY || '');
 const MAIL_FROM = String(process.env.MAIL_FROM || '');
+const EMAIL_TIMEOUT_MS = Number(process.env.EMAIL_TIMEOUT_MS) || 10000;
 const testOutbox = [];
 
 function deliveryMode() {
@@ -67,7 +68,8 @@ async function deliver({ to, subject, text, html, code, purpose }) {
       Authorization: `Bearer ${RESEND_API_KEY}`,
       'Content-Type': 'application/json'
     },
-    body: JSON.stringify({ from: MAIL_FROM, to: [to], subject, text, html })
+    body: JSON.stringify({ from: MAIL_FROM, to: [to], subject, text, html }),
+    signal: AbortSignal.timeout(EMAIL_TIMEOUT_MS)
   });
   if (!response.ok) {
     const detail = await response.text().catch(() => '');

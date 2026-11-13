@@ -52,6 +52,7 @@ const state = {
   adminCount: null,
   adminCandidateIndex: 0,
   adminPicture: undefined,
+  adminAudit: [],
   setupElection: null,
   setupSlug: null,
   registeredUsername: '',
@@ -936,7 +937,7 @@ function voting() {
               (c, i) =>
                 '<article class="vote-profile-card">' +
                 (c.picture
-                  ? '<img class="candidate-portrait" src="' + c.picture + '" alt="' + escapeHtml(c.name) + '">'
+                  ? '<img class="candidate-portrait" src="' + escapeHtml(c.picture) + '" alt="' + escapeHtml(c.name) + '">'
                   : candidatePortrait(c, i)) +
                 '<div class="vote-profile-description"><span class="eyebrow">Candidate ' +
                 String(i + 1).padStart(2, '0') +
@@ -1281,9 +1282,15 @@ function manage() {
     'Voting closed',
     'Results published'
   ];
+  const auditRows = state.adminAudit
+    .map(
+      (entry) =>
+        `<tr><td>${fmtDateTime(entry.createdAt)}</td><td>${escapeHtml(entry.actorUsername || 'system')}</td><td>${escapeHtml(entry.action)}</td><td>${escapeHtml(entry.candidateName || entry.detail || '')}</td></tr>`
+    )
+    .join('');
   return (
     heading('Manage election', election.title) +
-    `<div class="tabs">${link('manage?election=' + election.slug, 'Overview', 'selected')}${link('admin-nominations?election=' + election.slug, 'Nominations')}${link('counting?election=' + election.slug, 'Counting & results')}${link('voter-roll?election=' + election.slug, 'Voter roll')}</div><div class="panel"><div class="section-head"><h2>Election stage</h2>${statusBadge(election)}</div>${timelineFor(election)}<form data-form="stage" data-slug="${election.slug}"><div class="formgrid">${select('Preview election stage', 'stage', stageOptions, election.stage)}</div><div class="actions"><button class="btn">Update stage</button></div></form></div><div class="panel"><h2 class="panel-title">Election summary</h2><dl class="facts"><div><dt>Eligible voters</dt><dd>${eligible} ${election.voterMode === 'roll' ? 'on the roll' : 'verified voters'}</dd></div><div><dt>Voter mode</dt><dd>${election.voterMode === 'roll' ? 'Voter roll with one-time codes' : 'Open voting'}</dd></div><div><dt>Approved candidates</dt><dd>${approved} candidate${approved === 1 ? '' : 's'}</dd></div><div><dt>Voting period</dt><dd>${fmtRange(election.votingOpen, election.votingClose)}</dd></div><div><dt>Results announcement</dt><dd>${fmtDateTime(election.resultsAt)}</dd></div></dl><div class="actions">${btn('counting?election=' + election.slug, 'View counting screen →')}${btn('candidate-entry?election=' + election.slug, 'Edit candidate descriptions', true)}${btn('vote?round=1', 'First-round preview', true)}${btn('vote?round=2', 'Second-round preview', true)}${btn('setup?edit=' + election.slug, 'Edit upcoming election', true)}</div></div>`
+    `<div class="tabs">${link('manage?election=' + election.slug, 'Overview', 'selected')}${link('admin-nominations?election=' + election.slug, 'Nominations')}${link('counting?election=' + election.slug, 'Counting & results')}${link('voter-roll?election=' + election.slug, 'Voter roll')}</div><div class="panel"><div class="section-head"><h2>Election stage</h2>${statusBadge(election)}</div>${timelineFor(election)}<form data-form="stage" data-slug="${election.slug}"><div class="formgrid">${select('Preview election stage', 'stage', stageOptions, election.stage)}</div><div class="actions"><button class="btn">Update stage</button></div></form></div><div class="panel"><h2 class="panel-title">Election summary</h2><dl class="facts"><div><dt>Eligible voters</dt><dd>${eligible} ${election.voterMode === 'roll' ? 'on the roll' : 'verified voters'}</dd></div><div><dt>Voter mode</dt><dd>${election.voterMode === 'roll' ? 'Voter roll with one-time codes' : 'Open voting'}</dd></div><div><dt>Approved candidates</dt><dd>${approved} candidate${approved === 1 ? '' : 's'}</dd></div><div><dt>Voting period</dt><dd>${fmtRange(election.votingOpen, election.votingClose)}</dd></div><div><dt>Results announcement</dt><dd>${fmtDateTime(election.resultsAt)}</dd></div></dl><div class="actions">${btn('counting?election=' + election.slug, 'View counting screen →')}${btn('candidate-entry?election=' + election.slug, 'Edit candidate descriptions', true)}${btn('vote?round=1', 'First-round preview', true)}${btn('vote?round=2', 'Second-round preview', true)}${btn('setup?edit=' + election.slug, 'Edit upcoming election', true)}</div></div><div class="panel"><h2 class="panel-title">Recent audit events</h2>${auditRows ? `<div class="table-scroll"><table><thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Detail</th></tr></thead><tbody>${auditRows}</tbody></table></div>` : '<p class="compact-copy">No audit events recorded for this election yet.</p>'}</div>`
   );
 }
 
@@ -1792,6 +1799,10 @@ async function loadRouteData(route, q) {
         state.adminElection = data.election;
         state.adminCandidates = data.candidates;
         state.adminCount = data.count;
+        if (route === 'manage') {
+          const audit = await api('/api/admin/audit?election=' + encodeURIComponent(slug) + '&limit=15');
+          state.adminAudit = audit.entries || [];
+        }
         state.adminCandidateIndex = Math.min(
           state.adminCandidateIndex,
           Math.max(0, data.candidates.length - 1)
