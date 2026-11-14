@@ -25,6 +25,8 @@ erDiagram
     ELECTIONS ||--o{ RESULT_ENTRIES : freezes
     CANDIDATES ||--o{ VOTES : receives
     CANDIDATES ||--o{ RESULT_ENTRIES : appears_in
+    USERS ||--o{ AUDIT_LOG : performs
+    ELECTIONS ||--o{ AUDIT_LOG : scoped_to
 
     USERS {
         int id PK
@@ -107,6 +109,16 @@ erDiagram
         int eligible_voters
         string published_at
     }
+
+    AUDIT_LOG {
+        int id PK
+        int actor_id FK
+        string action
+        int election_id FK
+        int candidate_id FK
+        string detail
+        string created_at
+    }
 ```
 
 Key constraints:
@@ -116,6 +128,7 @@ Key constraints:
 - `votes` has `UNIQUE (election_id, round, voter_id)`.
 - `voter_roll` is unique per election by external ID, email and code hash.
 - `result_entries` has `UNIQUE (election_id, round, candidate_id)`.
+- `audit_log` is append-only and indexed by `(election_id, created_at)`; it never stores secrets.
 - Foreign keys use `ON DELETE CASCADE` or `SET NULL` where appropriate.
 - `elections.stage`, `entry_mode`, `round_mode`, and user roles use `CHECK` constraints.
 
@@ -128,12 +141,12 @@ Key constraints:
 | `server/google.js` | Google OAuth, PKCE, ID-token verification, account linking | `googleConfigured`, `oauthClient`, `pkcePair`, `findOrCreateGoogleUser` |
 | `server/mailer.js` | Resend/console/test email delivery | `sendVerificationEmail`, `sendVoterCodeEmail`, `testCodeFor` |
 | `server/voter-codes.js` | One-time code generation and HMAC hashing | `generateVoterCode`, `hashVoterCode`, `normalizeCode` |
-| `server/helpers.js` | Serialization, candidate selection, status derivation, vote counting, result summaries | `serializeElection`, `serializeCandidate`, `countVotes`, `resultSummary`, `electionStatus`, `publicElectionBySlug` |
+| `server/helpers.js` | Serialization, candidate selection, status derivation, vote counting, result summaries, audit recording | `serializeElection`, `serializeCandidate`, `countVotes`, `resultSummary`, `electionStatus`, `publicElectionBySlug`, `recordAudit` |
 | `server/routes/auth.js` | Registration, email verification, Google login, logout, session, demo admin | Router |
 | `server/routes/elections.js` | Public election, candidate, result, and personal vote APIs | Router |
 | `server/routes/nominations.js` | Nomination creation and editing | Router |
 | `server/routes/votes.js` | Vote casting and personal vote lookup | Router |
-| `server/routes/admin.js` | Election lifecycle, candidate review, counting, publishing | Router |
+| `server/routes/admin.js` | Election lifecycle, candidate review, voter rolls, audit reporting, counting, publishing | Router |
 | `app.js` | SPA routing, state, API calls, rendering, event handling | Browser script |
 
 ## 4. API design
@@ -180,6 +193,7 @@ Key constraints:
 | `POST` | `/api/admin/elections` | Create an election |
 | `PUT` | `/api/admin/elections/:slug` | Edit an election |
 | `PATCH` | `/api/admin/elections/:slug/stage` | Change lifecycle stage |
+| `GET` | `/api/admin/audit` | Administrator audit log, optionally filtered by `election` slug |
 | `GET` | `/api/admin/elections/:slug/count` | Live count |
 | `POST` | `/api/admin/elections/:slug/publish` | Publish results |
 | `GET` | `/api/admin/elections/:slug/nominations` | All nominations |
@@ -265,7 +279,7 @@ Reuse keeps the codebase small, but it also means the project owns its routing, 
 ## 9. Host-target development
 
 - **Development host:** Windows or any Node.js-capable OS, with the app and tests run locally.
-- **Target host:** a Node.js 22.5+ environment with a persistent disk for SQLite and an HTTPS reverse proxy or tunnel.
+- **Target host:** a Node.js 22.13+ environment with a persistent disk for SQLite and an HTTPS reverse proxy or tunnel.
 - **Parity concerns:** Windows and Linux path handling, SQLite file permissions, and proxy headers. Tests use a temporary database path and `127.0.0.1`, which reduces platform coupling.
 
 ## 10. Implementation constraints

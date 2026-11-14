@@ -62,8 +62,8 @@ For a solo or small-team version, one person can hold multiple roles, but the re
 | Should | Multi-seat publishing | Elected count respects seats; boundary tie reported |
 | Should | Stage transition validation | Invalid lifecycle jumps rejected |
 | Should | Automated tests and CI | Suite runs on Node.js 22 and 24 |
-| Could | Audit log | Administrator actions recorded with actor and timestamp |
-| Could | Per-election voter roll | Eligibility group enforced |
+| Done | Audit log | Administrator actions recorded with actor and timestamp |
+| Done | Per-election voter roll | Eligibility group enforced through a CSV roll with one-time codes |
 | Could | Frontend module split | `app.js` split into core, student, and admin files |
 | Could | Stable deployment | Named tunnel or platform deployment |
 
@@ -94,6 +94,7 @@ For a solo or small-team version, one person can hold multiple roles, but the re
 
 - Multi-seat publishing.
 - Stage transition validation.
+- Voter rolls with one-time codes and the administrator audit log.
 - Demo/production configuration separation.
 - Unit tests, coverage, CI, documentation.
 - Usability and accessibility review.
@@ -175,11 +176,11 @@ Metrics should guide improvement, not drive it. The primary goal is a correct, t
 
 | Risk | Impact | Mitigation |
 |---|---|---|
-| Eligibility is not verified | Ineligible users could vote | Import an official roll; require admin approval |
+| Eligibility is not verified in open elections | Ineligible users could vote | Voter-roll mode imports an official roll; otherwise require administrator approval |
 | Demo credentials reach production | Unauthorized administrator access | Disable demo mode and seeding in production |
 | Ballots are linkable to voters | Privacy concern | Separate ballot identity from vote content or encrypt |
 | Quick Tunnel instability | Public demo fails | Use a named tunnel or hosted deployment |
-| Schema drift | Data loss or failed upgrades | Add migrations and backups |
+| Schema drift | Data loss or failed upgrades | Additive startup migrations and backups; versioned migrations still missing |
 | Monolithic frontend | Hard to maintain | Split `app.js` into modules |
 | Test time dependency | Flaky CI | Inject a deterministic clock |
 | Single-instance assumptions | Concurrency issues at scale | Add a shared database and rate limiter |
@@ -191,4 +192,4 @@ Metrics should guide improvement, not drive it. The primary goal is a correct, t
 3. **Change:** introduce one improvement, such as a security checklist or a new test level.
 4. **Review:** compare the next iteration's metrics with the baseline.
 
-The current improvement priorities are: deterministic tests, security configuration, per-election eligibility, auditability, and frontend modularity.
+The current improvement priorities are: deterministic tests, closing the remaining backend coverage gap, browser end-to-end automation, ballot privacy, and frontend modularity.

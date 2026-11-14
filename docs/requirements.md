@@ -103,6 +103,7 @@ Out of scope: national or statutory elections, paper-ballot reconciliation, biom
 | FR-26 | The system shall expose a health endpoint for deployment checks. | Should |
 | FR-27 | The system shall avoid automatic demo seeding when `NODE_ENV=production`. | Must |
 | FR-28 | The administrator demo endpoint shall require `DEMO_MODE=true`. | Must |
+| FR-29 | The system shall record administrator election, review, stage and publishing actions in an immutable append-only audit log that only administrators can read. | Must |
 
 ## 6. Non-functional requirements
 
@@ -116,8 +117,8 @@ Out of scope: national or statutory elections, paper-ballot reconciliation, biom
 | NFR-06 | Privacy | Public APIs expose only approved candidate information and published results. |
 | NFR-07 | Maintainability | Domain logic is separated into database, helper, route, and frontend layers. |
 | NFR-08 | Testability | Core rules have automated tests and the suite runs in CI on Node.js 22 and 24. |
-| NFR-09 | Portability | The app runs on any platform supported by Node.js 22.5+ with no external database server. |
-| NFR-10 | Auditability | Result snapshots preserve vote totals and publication timestamps. |
+| NFR-09 | Portability | The app runs on any platform supported by Node.js 22.13+ with no external database server. |
+| NFR-10 | Auditability | Result snapshots preserve vote totals and publication timestamps, and administrator actions are recorded in an append-only audit log. |
 
 ## 7. Business rules and constraints
 
@@ -128,8 +129,8 @@ Out of scope: national or statutory elections, paper-ballot reconciliation, biom
 5. The number of elected candidates must not exceed the configured seats; a tie at the seat boundary is reported rather than broken arbitrarily.
 6. Administrator actions require an administrator session; administrator accounts cannot apply as candidates or vote.
 7. Nomination editing is locked after the nomination deadline, approval, or rejection.
-8. The system does not currently enforce the free-text `eligible_group` field; eligibility is account-level.
-9. Self-registration currently grants eligibility. A production deployment must verify the electoral roll.
+8. The free-text `eligible_group` field is descriptive and is not enforced. When an election uses a voter roll, eligibility is enforced against that roll (the account email must match an entry and a one-time code is required); otherwise eligibility is account-level.
+9. Self-registration currently grants account-level eligibility. A production deployment must verify the electoral roll.
 
 ## 8. Use cases
 
@@ -178,7 +179,7 @@ Out of scope: national or statutory elections, paper-ballot reconciliation, biom
 
 - **Validity:** Each requirement maps to a user story or business rule.
 - **Consistency:** No requirement permits a second vote in the same round or a vote for a non-approved candidate.
-- **Completeness:** All implemented API routes and pages are covered by FR-01 to FR-28.
+- **Completeness:** All implemented API routes and pages are covered by FR-01 to FR-29.
 - **Realism:** The stack (Node.js, SQLite, vanilla SPA) supports the requirements without external services.
 - **Verifiability:** Each Must requirement has an automated test or a documented manual acceptance step.
 
@@ -186,27 +187,29 @@ Out of scope: national or statutory elections, paper-ballot reconciliation, biom
 
 | Requirement | Automated test | Notes |
 |---|---|---|
-| FR-01, FR-02 | Test 1, unit validation tests | Duplicate username and format checks |
-| FR-03, FR-04, FR-06 | Test 1, unit password tests | Session and password behaviour |
-| FR-05 | Test 3, Test 4 | Voter denied administrator routes |
-| FR-08 to FR-10 | Test 2, Test 3 | Creation, edit, dates, slug |
-| FR-11, FR-12 | Test 4 | Nomination limits and deadline |
-| FR-13 | Test 4 | Approval and administrator review |
-| FR-14 | Manual/API validation | Image format and size checks |
-| FR-15, FR-16 | Test 5 | Eligibility and duplicate prevention |
-| FR-17, FR-18 | Test 5, Test 7 | Windows, approved candidates, round restrictions |
-| FR-19 | Test 6 | Counting and ties |
-| FR-20, FR-21, FR-23 | Test 6 | Publication gating and frozen results |
-| FR-22 | Test 8 | Multi-seat publishing |
-| FR-24, FR-25 | Test 9, Test 6 | Invalid transitions and open-voting guard |
-| FR-26 | Test 11 | Health endpoint |
-| FR-27, FR-28 | Configuration review | Startup and demo-mode behaviour |
+| FR-01, FR-02 | API 1, 14, 25; unit email and username validation | Duplicate username, duplicate email, format checks, unverified accounts excluded |
+| FR-03, FR-03a, FR-04, FR-06 | API 1, 23; unit password hashing; manual Google check | Session lifecycle and constant-time password check; Google requires credentials, so it is verified manually |
+| FR-05 | API 3, 12 | Voter denied administrator routes; administrator restrictions |
+| FR-07 | Manual/code review | Login throttling is disabled under `NODE_ENV=test` |
+| FR-08 to FR-10 | API 2, 3, 21 | Creation, edit, dates, slug; editing cannot bypass stage rules |
+| FR-11, FR-12 | API 4, 12 | Nomination limits, member IDs, optimistic conflicts |
+| FR-13 | API 4, 12 | Approval, return-for-changes and review notes |
+| FR-14 | API 29; unit `validatePicture` | Image format, size and markup-injection checks |
+| FR-15, FR-16, FR-16a | API 5, 15, 22, 26 | Eligibility, duplicate prevention, roll binding, resend/revoke, roll clearing |
+| FR-17, FR-18 | API 5, 7, 16 | Windows, approved candidates, top-eight advancement |
+| FR-19 | API 6, 17 | Counting, ties, zero-vote seats |
+| FR-20, FR-21, FR-23 | API 6, 18 | Publication gating, frozen results, round consistency |
+| FR-22 | API 8 | Multi-seat publishing |
+| FR-24, FR-25 | API 9, 13, 21 | Invalid transitions, open-voting guard, stage/date consistency |
+| FR-26 | API 11, 27 | Health endpoint and cache headers |
+| FR-27, FR-28 | Unit production config test; code review | Startup refuses `DEMO_MODE` in production; demo endpoint is gated |
+| FR-29 | API 30 | Audit log is admin-only and records election changes |
 
 ## 11. Known limitations and future requirements
 
-- Eligibility groups are descriptive only; there is no per-election voter roll.
-- Self-registration marks accounts as eligible.
+- `eligible_group` is descriptive only. Per-election eligibility exists only in voter-roll mode; in open mode self-registration grants eligibility.
+- Self-registration marks accounts as eligible, so an open election trusts the account list rather than an official roll.
 - Ballots are stored with voter IDs; database administrators can link a voter to a candidate.
-- There is no administrator audit log.
-- There is no schema migration framework.
-- There is no browser end-to-end or load-test suite.
+- The audit log covers administrator actions only. Voter and background events are not recorded, and entries are append-only but not tamper-evident (no hash chain).
+- Schema changes use additive migrations only (`ALTER TABLE ... ADD COLUMN` at startup); there is no versioned migration history or rollback.
+- There is no browser end-to-end or load-test suite, and the frontend (`app.js`) has no automated unit coverage.

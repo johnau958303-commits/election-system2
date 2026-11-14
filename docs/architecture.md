@@ -180,14 +180,14 @@ Result publication runs inside a `BEGIN IMMEDIATE` transaction that deletes old 
 | Testability | `createApp()` factory, temporary database path, API-level tests |
 | Portability | Node.js-only runtime, no native database server |
 | Privacy | Public APIs expose approved candidates and published results only |
-| Auditability | Result snapshots with timestamps and eligible-voter counts |
+| Auditability | Administrator actions recorded in `audit_log`; result snapshots with timestamps and eligible-voter counts |
 
 ## 7. Known architectural risks
 
-1. **Eligibility group is not enforced.** The `eligible_group` field is descriptive; eligibility is account-level.
+1. **`eligible_group` is not enforced.** The field is descriptive; per-election eligibility comes from the voter roll, and open elections rely on account-level eligibility.
 2. **Self-registration grants eligibility.** A production system needs an electoral-roll import or administrator approval.
 3. **Ballot secrecy is limited.** Votes store both voter and candidate IDs in the same row.
-4. **No audit trail.** Administrator actions are not recorded in a dedicated log.
-5. **No schema migrations.** Schema changes rely on `CREATE TABLE IF NOT EXISTS` and manual resets.
+4. **Audit coverage is partial.** Administrator actions are written to `audit_log`, but voter and background events are not recorded and entries are not tamper-evident.
+5. **Schema migrations are additive only.** Startup applies `ALTER TABLE ... ADD COLUMN`; there is no versioned migration history or rollback.
 6. **Quick Tunnel is ephemeral.** Public links change and may fail.
 7. **Single-process login throttle.** Limits are not shared across instances.

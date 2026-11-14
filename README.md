@@ -19,8 +19,10 @@ The server is Node.js + Express 5, persistence is SQLite through the built-in `n
 - One vote per eligible voter per round, enforced by a database constraint
 - Live counting, turnout, tie detection, and frozen result snapshots
 - Multi-seat result publishing
+- Administrator audit log for election, review, stage and publishing actions
 - Public election information, candidate profiles, and published results
 - Health endpoint for hosting checks
+- Backup script and an operations runbook
 - Automated unit and API integration tests
 - GitHub Actions CI for Node.js 22 and 24
 

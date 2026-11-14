@@ -42,7 +42,7 @@ Out of scope for automation:
 
 ## 4. Test environment
 
-- Node.js 22.5+ (CI runs 22.x and 24.x).
+- Node.js 22.13+ (CI runs 22.x and 24.x).
 - Temporary SQLite database per test run via `DB_PATH`.
 - `DEMO_MODE=true` for tests that use the seeded administrator.
 - `EMAIL_MODE=test` so verification and voter codes use an in-memory outbox.
@@ -87,6 +87,21 @@ npm run test:coverage
 | T-13 | Stage transitions enforce the approved-candidate round rule | FR-18, FR-24, UC-06 |
 | T-14 | Email verification is required before login; duplicate emails are blocked; Google is disabled without credentials | FR-01, FR-02 |
 | T-15 | Voter-roll codes bind to the matching account, work once per round, and can be resent/revoked | FR-15, FR-16, FR-17 |
+| T-16 | Second-round counts include only advanced finalists | FR-18 |
+| T-17 | Zero-vote candidates are not elected when seats exceed votes | FR-19, FR-22 |
+| T-18 | Publishing after the first round of a two-round election is rejected | FR-20, FR-25 |
+| T-19 | Publishing a two-round election selects the second round everywhere | FR-21, FR-22 |
+| T-20 | Candidate approvals are locked once voting is open | FR-13, FR-17 |
+| T-21 | Editing an election cannot bypass stage transitions | FR-08, FR-24 |
+| T-22 | Clearing the voter roll returns the election to open voting | FR-16a |
+| T-23 | A malformed cookie header does not break the session endpoint | FR-06 |
+| T-24 | Spoofed forwarded hosts do not pass the origin check | NFR-05 |
+| T-25 | Unverified accounts are not counted as eligible voters | FR-01, FR-15 |
+| T-26 | Voter-roll imports support swapping email addresses | FR-16a |
+| T-27 | Health endpoint verifies the database and disables caching | FR-26 |
+| T-28 | API responses send hardening headers | NFR-05 |
+| T-29 | Candidate picture URLs cannot inject markup | FR-14, NFR-06 |
+| T-30 | Audit log is admin-only and records election changes | FR-29 |
 
 ### Unit tests
 
@@ -101,23 +116,24 @@ npm run test:coverage
 | U-07 | Password hash verification accepts only the original password |
 | U-08 | Email validation requires a plausible address |
 | U-09 | One-time voter codes normalize, format, and hash consistently |
+| U-10 | Production refuses to start when `NODE_ENV=production` and `DEMO_MODE=true` |
 
 ## 7. Security test checklist
 
-- [ ] Unauthenticated access to protected APIs returns 401.
-- [ ] Voter access to administrator APIs returns 403.
-- [ ] Duplicate votes are rejected even under repeated requests.
-- [ ] Unverified accounts cannot log in.
-- [ ] Voter codes are invalid for a different account or email.
-- [ ] Ineligible users cannot vote.
-- [ ] Voting outside the configured window is rejected.
-- [ ] Second-round votes are rejected for non-advanced candidates.
-- [ ] Results are hidden before publication.
-- [ ] State-changing requests from an untrusted origin are rejected.
-- [ ] Login throttling returns 429 after repeated failures.
-- [ ] Demo admin is unavailable when `DEMO_MODE` is not `true`.
-- [ ] Production mode does not auto-seed demo accounts.
-- [ ] Error responses do not expose stack traces or secrets.
+- [x] Unauthenticated access to protected APIs returns 401. (T-03)
+- [x] Voter access to administrator APIs returns 403. (T-03, T-12)
+- [x] Duplicate votes are rejected even under repeated requests. (T-05)
+- [x] Unverified accounts cannot log in. (T-14)
+- [x] Voter codes are invalid for a different account or email. (T-15, T-26)
+- [x] Ineligible users cannot vote. (T-25)
+- [x] Voting outside the configured window is rejected. (T-05)
+- [x] Second-round votes are rejected for non-advanced candidates. (T-07, T-16)
+- [x] Results are hidden before publication. (T-06)
+- [x] State-changing requests from an untrusted origin are rejected. (T-24)
+- [ ] Login throttling returns 429 after repeated failures. Manual: throttling is disabled under `NODE_ENV=test`, so this is checked by hand.
+- [ ] Demo admin is unavailable when `DEMO_MODE` is not `true`. Code review: the route returns 403 unless `DEMO_MODE=true`.
+- [x] Production mode does not auto-seed demo accounts. (code review of `server/app.js` plus U-10)
+- [ ] Error responses do not expose stack traces or secrets. Manual/code review: handlers return generic messages.
 
 ## 8. Manual acceptance checklist
 
@@ -166,16 +182,24 @@ npm run test:coverage
 - All automated tests pass.
 - No open high-severity defects.
 - Manual acceptance checklist is complete.
-- Coverage is at least 80% of lines for the backend modules.
+- Coverage is tracked against a target of 80% of lines for the backend modules. The latest run is 78.82%, so this item is not formally met; the remaining gap and its cause are recorded in §10 and §12.
 - Requirements traceability has no unverified Must requirement.
 
 ## 10. Current coverage
 
-The `npm run test:coverage` report currently shows approximately:
+The latest `npm run test:coverage` run (Node.js 24) reports:
 
-- **81.5% lines**
-- **59.6% branches**
-- **82.2% functions**
+- **78.82% lines**
+- **65.93% branches**
+- **83.33% functions**
+
+Coverage is measured only for the backend modules loaded by the test suite. The browser client (`app.js`, about 2,400 lines) has no automated coverage and is not included.
+
+The main gaps are:
+
+- the optional Google OAuth path (`server/google.js` 21%, `server/routes/auth.js` 55%), which cannot run without live credentials and is verified manually;
+- administrator reporting and roll-management branches in `server/routes/admin.js` (80%);
+- route-level error paths in `server/routes/votes.js` (72%) and `server/routes/elections.js` (74%).
 
 Coverage is a guide, not a goal by itself. The most important election rules are covered by scenario tests.
 
@@ -192,7 +216,8 @@ A defect record should include the requirement ID, steps to reproduce, expected 
 
 ## 12. Known gaps
 
-- No browser end-to-end automation (Playwright/Cypress).
+- No browser end-to-end automation (Playwright/Cypress), so the frontend (`app.js`) has no automated regression coverage.
+- Backend line coverage is 78.82%, just under the 80% exit target; the gap is concentrated in the optional Google OAuth path and administrator reporting branches.
 - No load, stress, or soak tests.
 - No automated accessibility audit.
 - No penetration test.
